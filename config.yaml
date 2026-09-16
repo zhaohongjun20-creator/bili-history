@@ -1,0 +1,36 @@
+# bili-history 配置：军事历史自动化纪录片
+topics:
+  - "斯大林格勒战役：巷战如何拖垮第六集团军"
+  - "T-34坦克：倾斜装甲的设计哲学"
+  - "中途岛海战：五分钟改变太平洋战局"
+  - "敦刻尔克大撤退：败军为何成为传奇"
+  - "库尔斯克会战：史上最大坦克战"
+  - "狼群战术：大西洋潜艇战的兴衰"
+  - "伦敦空战：不列颠的至暗时刻"
+  - "瓜岛争夺战：太平洋战争的转折点"
+  - "巴巴罗萨行动：德军为何败于莫斯科城下"
+  - "诺曼底登陆：史上最大两栖作战的欺骗艺术"
+
+video:
+  width: 1920
+  height: 1080
+  fps: 30
+  sections_min: 8        # 讲稿段数范围
+  sections_max: 11
+  chars_per_section: [70, 110]   # 每段字数（约5字/秒 → 每段14-22秒）
+
+narrator:
+  voice: "zh-CN-YunjianNeural"   # 云健：纪录片风格男声
+  rate: "+5%"
+
+bgm_volume: 0.22        # 纪录片旁白为主，BGM 仅铺底
+
+bilibili:
+  tid: 203              # 资讯·军事（投稿失败时备选 201 知识·科学科普）
+  tags_extra: ["军事历史", "二战", "纪录片", "历史科普"]
+
+copywriter:
+  model: "glm-4-flash"
+  temperature: 0.7
+
+bgm_dir: "bgm"          # 从 bili-autopost-sau 曲库复制，或自行扩充
