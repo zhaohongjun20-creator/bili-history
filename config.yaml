@@ -26,7 +26,7 @@ narrator:
 bgm_volume: 0.22        # 纪录片旁白为主，BGM 仅铺底
 
 bilibili:
-  tid: 203              # 资讯·军事（投稿失败时备选 201 知识·科学科普）
+  tid: 239              # 知识·人文历史（原 203 军事分区已被B站下线）
   tags_extra: ["军事历史", "二战", "纪录片", "历史科普"]
 
 copywriter:
