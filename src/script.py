@@ -7,14 +7,18 @@ import json, re, requests
 ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
 OUTLINE_PROMPT = """你是B站军事历史区编导，策划一期战争史科普视频（只讲历史，不涉当代时政）。
+风格：严肃史实为主，但允许在叙述的间隙**适度玩梗**（B站流行语/网感吐槽，每1-2段至多一处，不破坏纪录片质感，涉及伤亡惨烈处禁用梗）。
+
 主题：{topic}
 
 输出 JSON，不要其他内容：
 {{"title": "40字内中文标题，克制有张力，不用感叹号",
   "tags": ["6个中文标签"],
-  "sections": [{{"point": "该段要讲的史实要点（一句话，含具体细节如时间地点数字）",
-                 "image_query": "2-4个英文单词的Wikimedia搜索词，如 'Midway aircraft 1942'"}}]}}
-共 {n_min}-{n_max} 段，构成起承转合。"""
+  "sections": [{{"point": "该段要讲的史实要点（一句话，含具体细节如时间地点数字；若玩梗在此注明梗的位置和内容）",
+                 "image_query": "2-4个英文单词的Wikimedia搜索词，如 'Midway aircraft 1942'",
+                 "stickers": [{{"emoji": "一个emoji字符", "at": 0.5, "why": "情绪点说明"}}]}}]}}
+共 {n_min}-{n_max} 段，构成起承转合。
+stickers 规则：**自行判断**哪些段落值得加表情贴纸——只在情绪高点/反差/玩梗处加（全篇0-4处，可以没有），at=贴纸出现时机（段内相对时间0-1），选与该句情绪匹配的 emoji。"""
 
 EXPAND_PROMPT = """把以下史实要点扩写成纪录片旁白段落，要求：
 - 中文 {c_lo}-{c_hi} 字（硬性要求，不足或超出都算失败）
@@ -79,5 +83,7 @@ def generate(api_key: str, topic: str, model: str = "glm-4-flash",
     sections = []
     for sec in outline["sections"]:
         text = _expand(api_key, sec["point"], model, temperature, c_lo, c_hi)
-        sections.append({"text": text, "image_query": sec["image_query"]})
+        sections.append({"text": text,
+                         "image_query": sec["image_query"],
+                         "stickers": sec.get("stickers") or []})
     return {"title": outline["title"], "sections": sections, "tags": outline["tags"]}

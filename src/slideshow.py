@@ -15,22 +15,36 @@ def _kenburns(mode: str) -> str:
 
 
 def build_section_clip(img: str, voice_mp3: str, duration: float, out_mp4: str,
-                       mode: str = "in") -> str:
+                       mode: str = "in", stickers: list = None) -> str:
+    """史料图 Ken Burns + 旁白 +（可选）Twemoji 表情贴纸 overlay。"""
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    frames = max(2, int(duration * FPS))
     vf = (f"scale={BIG}:{int(BIG*H/W)}:force_original_aspect_ratio=increase,"
           f"crop={BIG}:{int(BIG*H/W)},"
           f"zoompan=z='{_kenburns(mode)}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
           f":d=1:s={W}x{H}:fps={FPS},setsar=1")
-    cmd = [
-        ffmpeg, "-y", "-loop", "1", "-framerate", str(FPS),
-        "-t", f"{duration:.3f}", "-i", img,
-        "-i", voice_mp3,
-        "-filter_complex", f"[0:v]{vf}[v]",
-        "-map", "[v]", "-map", "1:a",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k", "-shortest", out_mp4,
-    ]
+
+    extra_inputs, chains, label = [], [], "[base]"
+    positions = [(W - 265, H - 400), (W - 450, H - 255)]   # 右侧偏下，避开字幕
+    for i, st in enumerate(stickers or []):
+        idx = 2 + i  # 输入：0=图 1=旁白 贴纸从2起
+        extra_inputs += ["-loop", "1", "-t", f"{duration:.3f}", "-i", st["path"]]
+        x, y = positions[i % len(positions)]
+        nxt = f"[s{i}]"
+        chains.append(f"{label}[{idx}:v]overlay=x={x}:y={y}:"
+                      f"enable='between(t,{st['at']:.2f},{st['at'] + 2.6:.2f})'{nxt}")
+        label = nxt
+
+    cmd = [ffmpeg, "-y", "-loop", "1", "-framerate", str(FPS),
+           "-t", f"{duration:.3f}", "-i", img,
+           "-i", voice_mp3, *extra_inputs]
+    if stickers:
+        fc = f"[0:v]{vf}[base];" + ";".join(chains)
+        cmd += ["-filter_complex", fc, "-map", label, "-map", "1:a"]
+    else:
+        fc = f"[0:v]{vf}[v]"
+        cmd += ["-filter_complex", fc, "-map", "[v]", "-map", "1:a"]
+    cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k", "-shortest", out_mp4]
     subprocess.run(cmd, check=True, capture_output=True, timeout=600)
     return out_mp4
 

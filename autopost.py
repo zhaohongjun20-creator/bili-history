@@ -92,15 +92,21 @@ def run(dry_run: bool, topic_index: int | None):
 
     section_files, credits = [], []
     from urllib.parse import urlparse as _up
+    from src.sticker import resolve_stickers
     for i, (sec, v) in enumerate(zip(secs, voices)):
         im = pool_imgs[i % len(pool_imgs)]
         ext = Path(_up(im["url"]).path).suffix.lower() or ".jpg"
         p = f"{IMG_DIR}/sec_{i:02d}{ext}"
         wikiimg.download_image(im["url"], p)
         credits.append(f"{im['title'].replace('File:', '')}（{im['license']}, {im['author']}）")
+        stickers = resolve_stickers(sec.get("stickers"), v["duration"])
+        if stickers:
+            log.info("段落%d 贴纸: %s", i,
+                     ", ".join(f"{Path(s['path']).stem}@{s['at']:.1f}s" for s in stickers))
         clip = f"{DL_DIR}/sec_{i:02d}.mp4"
         slideshow.build_section_clip(p, v["path"], v["duration"], clip,
-                                     mode="in" if i % 2 == 0 else "out")
+                                     mode="in" if i % 2 == 0 else "out",
+                                     stickers=stickers)
         section_files.append(clip)
         log.info("段落%d %.1fs 配图=%s", i, v["duration"], im["title"][5:45])
 
@@ -120,7 +126,8 @@ def run(dry_run: bool, topic_index: int | None):
 
     desc = (f"{doc['title']}\n\n本片由 AI 辅助制作：文案/配音/剪辑自动化流水线，"
             f"史实内容欢迎评论区指正。\n图片来源（Wikimedia Commons）："
-            + "；".join(dict.fromkeys(credits)) + "\nBGM: Kevin MacLeod (incompetech.com), CC BY 4.0")
+            + "；".join(dict.fromkeys(credits)) +
+            "\n贴纸: Twemoji (CC BY 4.0)\nBGM: Kevin MacLeod (incompetech.com), CC BY 4.0")
     tags = list(dict.fromkeys(doc["tags"] + cfg["bilibili"]["tags_extra"]))[:10]
 
     if dry_run:
