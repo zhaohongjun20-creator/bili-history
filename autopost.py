@@ -79,7 +79,7 @@ def run(dry_run: bool, topic_index: int | None):
         " ".join(sec["image_query"].split()[:2]) for sec in secs))[:2]
     pool_imgs = []
     for q in core_queries:
-        pool_imgs += wikiimg.search_images(q, limit=15)
+        pool_imgs += wikiimg.search_images(q, limit=max(15, len(secs)))
         if len(pool_imgs) >= len(secs):
             break
     if len(pool_imgs) < len(secs):                       # 池不足，按段补搜
@@ -90,7 +90,9 @@ def run(dry_run: bool, topic_index: int | None):
     if not pool_imgs:
         raise RuntimeError("配图全池失败，稍后重跑（可能处于限流窗口）")
 
-    section_files, credits = [], []
+    fade = float(cfg.get("transition", {}).get("fade_seconds", 0.6))
+    modes = ["in", "panright", "out", "panleft"]
+    section_files, credits, quotes = [], [], []
     from urllib.parse import urlparse as _up
     from src.sticker import resolve_stickers
     for i, (sec, v) in enumerate(zip(secs, voices)):
@@ -99,24 +101,34 @@ def run(dry_run: bool, topic_index: int | None):
         p = f"{IMG_DIR}/sec_{i:02d}{ext}"
         wikiimg.download_image(im["url"], p)
         credits.append(f"{im['title'].replace('File:', '')}（{im['license']}, {im['author']}）")
+        if sec.get("quote"):
+            q = sec["quote"]
+            quotes.append(f"“{q.get('text', '')}”——{q.get('author', '')}"
+                          f"（{q.get('context', '')}）" if q.get("context")
+                          else f"“{q.get('text', '')}”——{q.get('author', '')}")
         stickers = resolve_stickers(sec.get("stickers"), v["duration"])
         if stickers:
             log.info("段落%d 贴纸: %s", i,
                      ", ".join(f"{Path(s['path']).stem}@{s['at']:.1f}s" for s in stickers))
-        clip = f"{DL_DIR}/sec_{i:02d}.mp4"
-        slideshow.build_section_clip(p, v["path"], v["duration"], clip,
-                                     mode="in" if i % 2 == 0 else "out",
-                                     stickers=stickers)
-        section_files.append(clip)
-        log.info("段落%d %.1fs 配图=%s", i, v["duration"], im["title"][5:45])
 
-    # ⑤ 合成
+        # 尾部留 fade 秒（除末段）：旁白说完画面停留后溶解切换
+        tail = 0.0 if i == len(secs) - 1 else fade
+        v["tail"] = tail
+        clip = f"{DL_DIR}/sec_{i:02d}.mp4"
+        slideshow.build_section_clip(p, v["path"], v["duration"] + tail, clip,
+                                     mode=modes[i % 4], stickers=stickers)
+        section_files.append(clip)
+        log.info("段落%d %.1fs(+%.1f尾) 运镜=%s 配图=%s",
+                 i, v["duration"], tail, modes[i % 4], im["title"][5:40])
+
+    # ⑤ 合成（xfade 交叉溶解）
     bgms = sorted(Path(cfg["bgm_dir"]).glob("*.mp3"))
     final = f"{DL_DIR}/final.mp4"
     srt = slideshow.make_srt(voices, f"{DL_DIR}/final.srt")
     slideshow.compose_final(section_files, str(random.choice(bgms)), srt, final,
-                            bgm_volume=float(cfg["bgm_volume"]))
-    log.info("成片: %s (%.1f MB)", final, os.path.getsize(final) / 1e6)
+                            bgm_volume=float(cfg["bgm_volume"]), fade=fade)
+    log.info("成片: %s (%.1f MB, %d段, 溶解转场%.1fs)",
+             final, os.path.getsize(final) / 1e6, len(secs), fade)
 
     # 封面用第一段画面
     cover = f"{DL_DIR}/final_cover.jpg"
@@ -126,8 +138,18 @@ def run(dry_run: bool, topic_index: int | None):
 
     desc = (f"{doc['title']}\n\n本片由 AI 辅助制作：文案/配音/剪辑自动化流水线，"
             f"史实内容欢迎评论区指正。\n图片来源（Wikimedia Commons）："
-            + "；".join(dict.fromkeys(credits)) +
-            "\n贴纸: Twemoji (CC BY 4.0)\nBGM: Kevin MacLeod (incompetech.com), CC BY 4.0")
+            + "；".join(dict.fromkeys(credits)))
+    if quotes:
+        desc += "\n\n名言引用：\n" + "\n".join(dict.fromkeys(quotes))
+    desc += "\n贴纸: Twemoji (CC BY 4.0)\nBGM: Kevin MacLeod (incompetech.com), CC BY 4.0"
+
+    # manifest 持久化：进程中断后仍可恢复发布（元数据不再依赖内存）
+    import json
+    json.dump({"topic": topic, "title": doc["title"], "desc": desc,
+               "tags": list(dict.fromkeys(doc["tags"] + cfg["bilibili"]["tags_extra"]))[:10],
+               "final": final, "cover": cover},
+              open(f"{DL_DIR}/manifest.json", "w", encoding="utf-8"),
+              ensure_ascii=False, indent=1)
     tags = list(dict.fromkeys(doc["tags"] + cfg["bilibili"]["tags_extra"]))[:10]
 
     if dry_run:

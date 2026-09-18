@@ -1,4 +1,8 @@
-"""幻灯片成片：史料图 Ken Burns 动效 + 旁白逐段对齐 + BGM 铺底 + 字幕烧录。"""
+"""幻灯片成片：史料图四向 Ken Burns + 旁白逐段对齐 + 交叉溶解转场 + BGM + 字幕。
+
+转场音画对齐原理：每段视频（除末段）尾部多留 fade 秒画面，旁白说完后画面
+停留溶解切换（纪录片节奏）；音频 concat 后总长恰与 xfade 后视频总长相等。
+"""
 import subprocess
 from pathlib import Path
 import imageio_ffmpeg
@@ -7,20 +11,27 @@ W, H, FPS = 1920, 1080, 30
 BIG = 2400  # 先放大再 zoom，减轻整数抖动
 
 
-def _kenburns(mode: str) -> str:
-    """交替推/拉：zoom in 从1.0缓推，zoom out 从1.12缓拉。"""
+def _kenburns(mode: str, frames: int) -> str:
+    """四向运镜：in 推近 / out 拉远 / panleft 左移 / panright 右移。"""
+    center = "iw/2-(iw/zoom/2)"
+    vcenter = "ih/2-(ih/zoom/2)"
     if mode == "in":
-        return "min(1.0+0.0006*on,1.12)"
-    return "max(1.12-0.0006*on,1.0)"
+        return f"z='min(1.0+0.0006*on,1.12)':x='{center}':y='{vcenter}'"
+    if mode == "out":
+        return f"z='max(1.12-0.0006*on,1.0)':x='{center}':y='{vcenter}'"
+    if mode == "panright":
+        return (f"z='1.10':x='(iw-iw/zoom)*on/{frames}':y='{vcenter}'")
+    return f"z='1.10':x='(iw-iw/zoom)*(1-on/{frames})':y='{vcenter}'"
 
 
 def build_section_clip(img: str, voice_mp3: str, duration: float, out_mp4: str,
                        mode: str = "in", stickers: list = None) -> str:
     """史料图 Ken Burns + 旁白 +（可选）Twemoji 表情贴纸 overlay。"""
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    frames = max(2, int(duration * FPS))
     vf = (f"scale={BIG}:{int(BIG*H/W)}:force_original_aspect_ratio=increase,"
           f"crop={BIG}:{int(BIG*H/W)},"
-          f"zoompan=z='{_kenburns(mode)}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+          f"zoompan={_kenburns(mode, frames)}"
           f":d=1:s={W}x{H}:fps={FPS},setsar=1")
 
     extra_inputs, chains, label = [], [], "[base]"
@@ -58,43 +69,83 @@ def _fmt_ts(seconds: float) -> str:
 
 
 def make_srt(narrations: list, path: str) -> str:
-    """每段旁白一条字幕，时间轴按段起点对齐。"""
+    """每段旁白一条字幕，时间轴按段起点对齐（含转场偏移）。"""
     lines, t0 = [], 0.0
     for i, n in enumerate(narrations, 1):
         lines += [str(i), f"{_fmt_ts(t0)} --> {_fmt_ts(t0 + n['duration'])}",
                   n["text"].replace("\n", " "), ""]
-        t0 += n["duration"]
+        t0 += n["duration"] + n.get("tail", 0.0)
     Path(path).write_text("\n".join(lines), encoding="utf-8")
     return path
 
 
 def compose_final(section_files: list, bgm_path: str, srt_path: str,
-                  out_path: str, bgm_volume: float = 0.22) -> str:
-    """concat 各段 → 混 BGM → 烧字幕。"""
+                  out_path: str, bgm_volume: float = 0.22,
+                  fade: float = 0.6) -> str:
+    """三步合成（一步大 filter 图会因 apad 无限流+多级 xfade 死锁）：
+    A. 仅视频：多级 xfade 交叉溶解
+    B. 仅音频：concat 各段旁白
+    C. 收尾：视频字幕烧录 + 旁白/BGM 混音
+    """
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    list_file = Path(out_path + ".list.txt")
-    # concat demuxer 的相对路径基于 list 文件目录解析，故用绝对路径最稳
-    list_file.write_text(
-        "\n".join(f"file '{Path(f).resolve().as_posix()}'" for f in section_files),
-        encoding="utf-8")
+    n = len(section_files)
+    work = Path(out_path).with_suffix("")
+    v_only, a_only = f"{work}_v.mp4", f"{work}_a.m4a"
+
+    # 各段实际时长
+    durs = []
+    for f in section_files:
+        r = subprocess.run([ffmpeg, "-i", f], capture_output=True, text=True, timeout=60)
+        line = next((l for l in r.stderr.splitlines() if "Duration" in l), "")
+        hh, mm, ss = line.split("Duration:")[1].split(",")[0].strip().split(":")
+        durs.append(int(hh) * 3600 + int(mm) * 60 + float(ss))
+
+    # A. 仅视频 xfade（settb 统一时间基，xfade 的硬要求）
+    # acc=已合成流总长：offset=acc-fade，合成后 acc=offset+durs[i]（勿重复累加）
+    fc_parts, acc, cur = [f"[0:v]settb=AVTB[b0]"], durs[0], "[b0]"
+    for i in range(1, n):
+        offset = max(0.0, acc - fade)
+        fc_parts.append(f"[{i}:v]settb=AVTB,format=yuv420p[s{i}]")
+        fc_parts.append(f"{cur}[s{i}]xfade=transition=fade:duration={fade}:"
+                        f"offset={offset:.3f}[b{i}]")
+        cur = f"[b{i}]"
+        acc = offset + durs[i]
+    fc_a = ";".join(fc_parts)
+    cmd_a = [ffmpeg, "-y"]
+    for f in section_files:
+        cmd_a += ["-i", str(Path(f).resolve())]
+    cmd_a += ["-filter_complex", fc_a, "-map", cur, "-an",
+              "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+              "-pix_fmt", "yuv420p", v_only]
+    subprocess.run(cmd_a, check=True, capture_output=True, timeout=3600)
+
+    # B. 仅音频 concat
+    fc_b = ("".join(f"[{i}:a]" for i in range(n)) +
+            f"concat=n={n}:v=0:a=1[aout]")
+    cmd_b = [ffmpeg, "-y"]
+    for f in section_files:
+        cmd_b += ["-i", str(Path(f).resolve())]
+    cmd_b += ["-filter_complex", fc_b, "-map", "[aout]",
+              "-c:a", "aac", "-b:a", "192k", a_only]
+    subprocess.run(cmd_b, check=True, capture_output=True, timeout=600)
+
+    # C. 收尾：字幕 + BGM 混音（单视频流，轻）
     style = ("FontName=Microsoft YaHei,FontSize=15,PrimaryColour=&H00FFFFFF,"
              "OutlineColour=&H96000000,BorderStyle=1,Outline=1,Shadow=0,MarginV=26,"
              "Alignment=2")
-    # 字体走系统 directwrite（无需 fontsdir）；srt 用相对路径避免盘符冒号转义
-    fc = (f"[1:a]volume={bgm_volume}[bg];"
-          f"[0:a][bg]amix=inputs=2:duration=first:normalize=0[aout];"
-          f"[0:v]subtitles={Path(srt_path).as_posix()}"
-          f":force_style='{style}'[vout]")
-    cmd = [
-        ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file),
-        "-stream_loop", "-1", "-i", bgm_path,
-        "-filter_complex", fc,
-        "-map", "[vout]", "-map", "[aout]",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k", "-shortest", out_path,
-    ]
+    fc_c = (f"[2:a]volume={bgm_volume}[bg];"
+            f"[1:a][bg]amix=inputs=2:duration=first:normalize=0[aout];"
+            f"[0:v]subtitles={Path(srt_path).as_posix()}"
+            f":force_style='{style}'[vout]")
+    cmd_c = [ffmpeg, "-y", "-i", v_only, "-i", a_only,
+             "-stream_loop", "-1", "-i", bgm_path,
+             "-filter_complex", fc_c,
+             "-map", "[vout]", "-map", "[aout]",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-b:a", "192k", "-shortest", out_path]
     try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=1800)
+        subprocess.run(cmd_c, check=True, capture_output=True, timeout=3600)
     finally:
-        list_file.unlink(missing_ok=True)
+        Path(v_only).unlink(missing_ok=True)
+        Path(a_only).unlink(missing_ok=True)
     return out_path

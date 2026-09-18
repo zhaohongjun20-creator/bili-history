@@ -15,9 +15,12 @@ video:
   width: 1920
   height: 1080
   fps: 30
-  sections_min: 8        # 讲稿段数范围
-  sections_max: 11
-  chars_per_section: [70, 110]   # 每段字数（约5字/秒 → 每段14-22秒）
+  sections_min: 12        # 讲稿段数范围（12-16段 ≈ 4-5分钟）
+  sections_max: 16
+  chars_per_section: [80, 130]   # 每段字数（约5字/秒 → 每段16-26秒）
+
+transition:
+  fade_seconds: 0.6       # 段落间交叉溶解（旁白说完画面停留后溶解切换）
 
 narrator:
   voice: "zh-CN-YunjianNeural"   # 云健：纪录片风格男声

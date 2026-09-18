@@ -16,14 +16,19 @@ OUTLINE_PROMPT = """你是B站军事历史区编导，策划一期战争史科�
   "tags": ["6个中文标签"],
   "sections": [{{"point": "该段要讲的史实要点（一句话，含具体细节如时间地点数字；若玩梗在此注明梗的位置和内容）",
                  "image_query": "2-4个英文单词的Wikimedia搜索词，如 'Midway aircraft 1942'",
-                 "stickers": [{{"emoji": "一个emoji字符", "at": 0.5, "why": "情绪点说明"}}]}}]}}
+                 "stickers": [{{"emoji": "一个emoji字符", "at": 0.5, "why": "情绪点说明"}}],
+                 "quote": {{"text": "名言原文", "author": "出自谁", "context": "何时何地说/写"}}}}]}}
 共 {n_min}-{n_max} 段，构成起承转合。
-stickers 规则：**自行判断**哪些段落值得加表情贴纸——只在情绪高点/反差/玩梗处加（全篇0-4处，可以没有），at=贴纸出现时机（段内相对时间0-1），选与该句情绪匹配的 emoji。"""
+
+stickers 规则：**自行判断**哪些段落值得加表情贴纸——只在情绪高点/反差/玩梗处加（全篇0-4处，可以没有），at=贴纸出现时机（段内相对时间0-1），选与该句情绪匹配的 emoji。
+
+quote 规则：**自行判断**哪些段落适合引用文章/回忆录/名人名言（全篇1-3处）——优先克劳塞维茨《战争论》、丘吉尔演讲/回忆录、朱可夫回忆录、曼施坦因《失去的胜利》、戴高乐、艾森豪威尔等当事人的著作或演说。**硬性要求：只用真实存在且广为流传的名言，给出处；拿不准的一律不用**（宁缺毋滥，编造名言是纪录片大忌）。该段旁白应自然织入这句名言（引用后紧跟一句编导视角的回应或解读）。"""
 
 EXPAND_PROMPT = """把以下史实要点扩写成纪录片旁白段落，要求：
 - 中文 {c_lo}-{c_hi} 字（硬性要求，不足或超出都算失败）
 - 口语化叙述，有细节有节奏，克制不煽情
-- 只输出旁白正文，不要任何前缀、标题、引号
+- 若要点包含名言引用：将名言原文自然织入旁白（用引号），引用后接一句你的解读
+- 只输出旁白正文，不要任何前缀、标题、引号包裹全文
 
 要点：{point}"""
 
@@ -84,6 +89,7 @@ def generate(api_key: str, topic: str, model: str = "glm-4-flash",
     for sec in outline["sections"]:
         text = _expand(api_key, sec["point"], model, temperature, c_lo, c_hi)
         sections.append({"text": text,
-                         "image_query": sec["image_query"],
-                         "stickers": sec.get("stickers") or []})
+                         "image_query": sec.get("image_query") or topic,
+                         "stickers": sec.get("stickers") or [],
+                         "quote": sec.get("quote") or None})
     return {"title": outline["title"], "sections": sections, "tags": outline["tags"]}
