@@ -67,11 +67,16 @@ def run(dry_run: bool, topic_index: int | None):
     log.info("讲稿就绪: 《%s》 %d段 / %d字", doc["title"], len(secs),
              sum(len(s["text"]) for s in secs))
 
-    # ③ 配音
+    # ③ 配音（可插拔后端：edge 免费 / 智谱 cogtts 大模型，后者失败自动降级）
     narr = cfg["narrator"]
-    voices = narrator.narrate(secs, AUD_DIR, narr["voice"], narr["rate"])
+    zhipu_cfg = cfg.get("zhipu_tts", {})
+    zhipu_cfg = {**zhipu_cfg, "api_key": os.environ.get("ZHIPU_API_KEY", "")} \
+        if narr.get("backend") == "zhipu" else None
+    voices = narrator.narrate(secs, AUD_DIR, narr["voice"], narr["rate"],
+                              backend=narr.get("backend", "edge"), zhipu=zhipu_cfg)
     total = sum(v["duration"] for v in voices)
-    log.info("配音完成: %d段 共%.1f秒", len(voices), total)
+    log.info("配音完成: %d段 共%.1f秒 (backend=%s)", len(voices), total,
+             narr.get("backend", "edge"))
 
     # ④ 配图（主池策略：主题核心词 1-2 次大搜索拉满池，段落按序取图；
     #          池不足时才用各段 image_query 补搜——请求量从 20+ 降到 2-4 次）

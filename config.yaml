@@ -23,8 +23,13 @@ transition:
   fade_seconds: 0.6       # 段落间交叉溶解（旁白说完画面停留后溶解切换）
 
 narrator:
-  voice: "zh-CN-YunjianNeural"   # 云健：纪录片风格男声
+  backend: "edge"             # edge（免费微软音色）| zhipu（大模型 TTS，更自然，余额不足自动降级 edge）
+  voice: "zh-CN-YunjianNeural"   # 云健：纪录片风格男声（edge 用）
   rate: "+5%"
+
+zhipu_tts:
+  model: "cogtts"             # 智谱语音合成模型
+  voice: "tongtong"           # 童童（女声）；API Key 复用 .env 的 ZHIPU_API_KEY
 
 bgm_volume: 0.22        # 纪录片旁白为主，BGM 仅铺底
 
