@@ -46,3 +46,12 @@
 
 ### 初版
 - 军事历史自动化纪录片流水线：GLM 讲稿 → Wikimedia 配图（PD/CC 授权过滤）→ edge-tts 配音 → Ken Burns 成片 → B站投稿
+
+## [0.5.1] - 2026-10-10（晚）
+
+### 新增
+- 抖音分发：`douyin_bridge.py`（Playwright 驱动创作中心，扫码登录一次永久保存登录态）
+  - 强制直连（`--no-proxy-server`，国内站走系统代理反而挂起）
+  - `--disable-gpu`（抖音登录页 canvas 动画触发 Windows 有头 Chromium GPU 崩溃）
+  - 描述编辑器多选择器兜底、全步骤截图留档、发布结果多重确认
+- autopost 接线：B站发布后自动分发抖音（`douyin.enable` 开关，失败不影响B站）

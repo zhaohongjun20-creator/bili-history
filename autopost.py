@@ -184,6 +184,16 @@ def run(dry_run: bool, topic_index: int | None):
         store.mark_topic(topic, doc["title"], f"failed:{e!r}")
         log.exception("投稿失败")
 
+    # ⑦ 抖音分发（可选：Playwright 驱动创作中心，登录态 data/douyin-state.json）
+    if cfg.get("douyin", {}).get("enable"):
+        try:
+            import douyin_bridge
+            tag_str = " ".join(f"#{t}" for t in tags[:4])
+            ok = douyin_bridge.upload(final, f"{doc['title']} {tag_str}")
+            log.info("抖音分发: %s", "成功" if ok else "失败(见data/截图)")
+        except Exception as e:
+            log.warning("抖音分发异常(不影响B站): %s", e)
+
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
