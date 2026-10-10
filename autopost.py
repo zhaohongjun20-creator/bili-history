@@ -68,15 +68,19 @@ def run(dry_run: bool, topic_index: int | None):
              sum(len(s["text"]) for s in secs))
 
     # ③ 配音（可插拔后端：edge 免费 / 智谱 cogtts 大模型，后者失败自动降级）
+    # 音色池按天轮换：同一天保持统一音色，跨天换声（多样化 A/B，抄 MPT 音色池思路）
     narr = cfg["narrator"]
+    pool = narr.get("voices") or [narr["voice"]]
+    voice = pool[datetime.now().timetuple().tm_yday % len(pool)]
+    log.info("本期音色: %s（池%d个，按天轮换）", voice, len(pool))
     zhipu_cfg = cfg.get("zhipu_tts", {})
     zhipu_cfg = {**zhipu_cfg, "api_key": os.environ.get("ZHIPU_API_KEY", "")} \
         if narr.get("backend") == "zhipu" else None
-    voices = narrator.narrate(secs, AUD_DIR, narr["voice"], narr["rate"],
+    voices = narrator.narrate(secs, AUD_DIR, voice, narr["rate"],
                               backend=narr.get("backend", "edge"), zhipu=zhipu_cfg)
     total = sum(v["duration"] for v in voices)
-    log.info("配音完成: %d段 共%.1f秒 (backend=%s)", len(voices), total,
-             narr.get("backend", "edge"))
+    log.info("配音完成: %d段 共%.1f秒 (backend=%s, voice=%s)", len(voices), total,
+             narr.get("backend", "edge"), voice)
 
     # ④ 配图（主池策略：主题核心词 1-2 次大搜索拉满池，段落按序取图；
     #          池不足时才用各段 image_query 补搜——请求量从 20+ 降到 2-4 次）
@@ -126,14 +130,19 @@ def run(dry_run: bool, topic_index: int | None):
         log.info("段落%d %.1fs(+%.1f尾) 运镜=%s 配图=%s",
                  i, v["duration"], tail, modes[i % 4], im["title"][5:40])
 
-    # ⑤ 合成（xfade 交叉溶解）
+    # ⑤ 合成（xfade 转场轮换 + BGM ducking + 字幕烧录）
     bgms = sorted(Path(cfg["bgm_dir"]).glob("*.mp3"))
     final = f"{DL_DIR}/final.mp4"
     srt = slideshow.make_srt(voices, f"{DL_DIR}/final.srt")
+    trans_cfg = cfg.get("transition", {})
+    subtitle_style = cfg.get("subtitle", {}).get("force_style") or None
     slideshow.compose_final(section_files, str(random.choice(bgms)), srt, final,
-                            bgm_volume=float(cfg["bgm_volume"]), fade=fade)
-    log.info("成片: %s (%.1f MB, %d段, 溶解转场%.1fs)",
-             final, os.path.getsize(final) / 1e6, len(secs), fade)
+                            bgm_volume=float(cfg["bgm_volume"]), fade=fade,
+                            transitions=trans_cfg.get("styles"),
+                            subtitle_style=subtitle_style)
+    log.info("成片: %s (%.1f MB, %d段, 转场池%s, BGM ducking)",
+             final, os.path.getsize(final) / 1e6, len(secs),
+             trans_cfg.get("styles") or slideshow.DEFAULT_TRANSITIONS)
 
     # 封面用第一段画面
     cover = f"{DL_DIR}/final_cover.jpg"

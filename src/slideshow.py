@@ -79,13 +79,23 @@ def make_srt(narrations: list, path: str) -> str:
     return path
 
 
+# 纪录片字幕样式：白字黑边+轻阴影（抄 MoneyPrinterTurbo 的可配置思路，默认值内置）
+SUBTITLE_STYLE = ("FontName=Microsoft YaHei,FontSize=17,PrimaryColour=&H00FFFFFF,"
+                  "OutlineColour=&H96000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=30,"
+                  "Alignment=2")
+
+# 段落转场轮换池（xfade 纪录片向：溶解/擦除/圆形展开/黑场）
+DEFAULT_TRANSITIONS = ["fade", "dissolve", "wipeleft", "circleopen", "fadeblack"]
+
+
 def compose_final(section_files: list, bgm_path: str, srt_path: str,
                   out_path: str, bgm_volume: float = 0.22,
-                  fade: float = 0.6) -> str:
+                  fade: float = 0.6, transitions: list = None,
+                  subtitle_style: str = None) -> str:
     """三步合成（一步大 filter 图会因 apad 无限流+多级 xfade 死锁）：
-    A. 仅视频：多级 xfade 交叉溶解
+    A. 仅视频：多级 xfade 转场（样式按 transitions 轮换，默认纪录片池）
     B. 仅音频：concat 各段旁白
-    C. 收尾：视频字幕烧录 + 旁白/BGM 混音
+    C. 收尾：视频字幕烧录 + 旁白/BGM 混音（sidechain 压低 BGM 突出人声）
     """
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     n = len(section_files)
@@ -102,11 +112,14 @@ def compose_final(section_files: list, bgm_path: str, srt_path: str,
 
     # A. 仅视频 xfade（settb 统一时间基，xfade 的硬要求）
     # acc=已合成流总长：offset=acc-fade，合成后 acc=offset+durs[i]（勿重复累加）
+    # 转场样式逐 junction 轮换（纪录片常见手法：相邻切换不重样）
+    styles = transitions or DEFAULT_TRANSITIONS
     fc_parts, acc, cur = [f"[0:v]settb=AVTB[b0]"], durs[0], "[b0]"
     for i in range(1, n):
         offset = max(0.0, acc - fade)
+        style = styles[(i - 1) % len(styles)]
         fc_parts.append(f"[{i}:v]settb=AVTB,format=yuv420p[s{i}]")
-        fc_parts.append(f"{cur}[s{i}]xfade=transition=fade:duration={fade}:"
+        fc_parts.append(f"{cur}[s{i}]xfade=transition={style}:duration={fade}:"
                         f"offset={offset:.3f}[b{i}]")
         cur = f"[b{i}]"
         acc = offset + durs[i]
@@ -130,11 +143,13 @@ def compose_final(section_files: list, bgm_path: str, srt_path: str,
     subprocess.run(cmd_b, check=True, capture_output=True, timeout=600)
 
     # C. 收尾：字幕 + BGM 混音（单视频流，轻）
-    style = ("FontName=Microsoft YaHei,FontSize=15,PrimaryColour=&H00FFFFFF,"
-             "OutlineColour=&H96000000,BorderStyle=1,Outline=1,Shadow=0,MarginV=26,"
-             "Alignment=2")
-    fc_c = (f"[2:a]volume={bgm_volume}[bg];"
-            f"[1:a][bg]amix=inputs=2:duration=first:normalize=0[aout];"
+    # BGM ducking：旁白作 sidechain 触发源，说话时 BGM 自动压低（广播级配比），
+    # 比固定音量 amix 层次感好得多——bgm_volume 变为"无人声时的铺底基线"
+    style = subtitle_style or SUBTITLE_STYLE
+    fc_c = (f"[1:a]asplit=2[voice][key];"
+            f"[2:a]volume={bgm_volume}[bg];"
+            f"[bg][key]sidechaincompress=threshold=0.02:ratio=6:attack=150:release=900[bgd];"
+            f"[voice][bgd]amix=inputs=2:duration=first:normalize=0[aout];"
             f"[0:v]subtitles={Path(srt_path).as_posix()}"
             f":force_style='{style}'[vout]")
     cmd_c = [ffmpeg, "-y", "-i", v_only, "-i", a_only,

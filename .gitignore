@@ -8,3 +8,4 @@ imgs/
 audio/
 *.list.txt
 .pytest_cache/
+lyricvideo/
