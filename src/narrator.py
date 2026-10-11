@@ -10,6 +10,9 @@ import imageio_ffmpeg
 
 ZHIPU_SPEECH_URL = "https://open.bigmodel.cn/api/paas/v4/audio/speech"
 
+# 音色熔断池：指定音色合成失败（如云泽在免费端点不可用）时按序降级，保产线不断
+EDGE_FALLBACK_VOICES = ["zh-CN-YunjianNeural", "zh-CN-YunyangNeural", "zh-CN-YunxiNeural"]
+
 
 def _synth_edge(text: str, out_path: str, voice: str, rate: str) -> str:
     async def run():
@@ -33,7 +36,7 @@ def _synth_zhipu(text: str, out_path: str, api_key: str, model: str, voice: str)
 
 def synth_section(text: str, out_path: str, voice: str, rate: str,
                   backend: str = "edge", zhipu: dict | None = None) -> str:
-    """按后端合成；zhipu 失败自动降级 edge。"""
+    """按后端合成；zhipu 失败降级 edge；edge 指定音色失败自动换熔断池音色。"""
     if backend == "zhipu" and zhipu and zhipu.get("api_key"):
         try:
             return _synth_zhipu(text, out_path, zhipu["api_key"],
@@ -41,7 +44,19 @@ def synth_section(text: str, out_path: str, voice: str, rate: str,
                                 zhipu.get("voice", "tongtong"))
         except Exception as e:
             print(f"[narrator] zhipu TTS 失败，降级 edge: {e}")
-    return _synth_edge(text, out_path, voice, rate)
+    try:
+        return _synth_edge(text, out_path, voice, rate)
+    except Exception as e:
+        for fb in EDGE_FALLBACK_VOICES:
+            if fb == voice:
+                continue
+            try:
+                _synth_edge(text, out_path, fb, rate)
+                print(f"[narrator] 音色 {voice} 失败({type(e).__name__})，已熔断降级 → {fb}")
+                return out_path
+            except Exception:
+                continue
+        raise RuntimeError(f"edge-tts 全部音色失败（含熔断池 {EDGE_FALLBACK_VOICES}）")
 
 
 def audio_duration(path: str) -> float:
