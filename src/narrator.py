@@ -13,6 +13,24 @@ ZHIPU_SPEECH_URL = "https://open.bigmodel.cn/api/paas/v4/audio/speech"
 # 音色熔断池：指定音色合成失败（如云泽在免费端点不可用）时按序降级，保产线不断
 EDGE_FALLBACK_VOICES = ["zh-CN-YunjianNeural", "zh-CN-YunyangNeural", "zh-CN-YunxiNeural"]
 
+# 本地 SAPI 兜底语音（微软封堵 edge-tts 免费端点时启用；离线可用，音质略机械）
+SAPI_VOICE = "Microsoft Huihui Desktop"
+
+
+def _synth_sapi(text: str, out_path: str) -> str:
+    """Windows 本地语音合成（System.Speech，wav 格式），edge 全线失败时的终极兜底。"""
+    wav = str(Path(out_path).with_suffix(".wav"))
+    ps = ("Add-Type -AssemblyName System.Speech;"
+          f"$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+          f"$s.SelectVoice('{SAPI_VOICE}'); $s.Rate = 0;"
+          f"$s.SetOutputToWaveFile('{wav}');"
+          "$s.Speak([Console]::In.ReadToEnd()); $s.Dispose()")
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                       input=text, text=True, capture_output=True, timeout=300)
+    if not Path(wav).exists() or Path(wav).stat().st_size < 5000:
+        raise RuntimeError(f"SAPI failed: {r.stderr[:150]}")
+    return wav
+
 
 def _synth_edge(text: str, out_path: str, voice: str, rate: str) -> str:
     async def run():
@@ -56,7 +74,13 @@ def synth_section(text: str, out_path: str, voice: str, rate: str,
                 return out_path
             except Exception:
                 continue
-        raise RuntimeError(f"edge-tts 全部音色失败（含熔断池 {EDGE_FALLBACK_VOICES}）")
+        # edge 全线失败（微软端封堵）→ 本地 SAPI 终极兜底
+        try:
+            wav = _synth_sapi(text, out_path)
+            print(f"[narrator] edge-tts 全线失败，本地 SAPI 兜底 → {wav}")
+            return wav
+        except Exception as e2:
+            raise RuntimeError(f"edge 与 SAPI 均失败: {e2}")
 
 
 def audio_duration(path: str) -> float:
@@ -77,7 +101,7 @@ def narrate(sections: list, out_dir: str, voice: str, rate: str,
     results = []
     for i, sec in enumerate(sections):
         mp3 = f"{out_dir}/sec_{i:02d}.mp3"
-        synth_section(sec["text"], mp3, voice, rate, backend=backend, zhipu=zhipu)
-        results.append({"path": mp3, "duration": audio_duration(mp3),
+        actual = synth_section(sec["text"], mp3, voice, rate, backend=backend, zhipu=zhipu)
+        results.append({"path": actual, "duration": audio_duration(actual),
                         "text": sec["text"]})
     return results
