@@ -68,7 +68,7 @@ zhipu_tts:
 bgm_volume: 0.22        # 纪录片旁白为主，BGM 仅铺底
 
 douyin:
-  enable: true   # B站发布后自动分发抖音（登录态 data/douyin-state.json；失效时重跑 python douyin_bridge.py login 扫码）
+  enable: false   # B站发布后自动分发抖音（登录态 data/douyin-state.json；失效时重跑 python douyin_bridge.py login 扫码）
 
 bilibili:
   tid: 239              # 知识·人文历史（原 203 军事分区已被B站下线）
