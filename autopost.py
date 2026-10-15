@@ -4,7 +4,7 @@
   python autopost.py --dry-run [主题序号(从1)]
   python autopost.py [主题序号]
 """
-import argparse, logging, os, random, sys
+import argparse, logging, os, random, sys, time
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -76,8 +76,22 @@ def run(dry_run: bool, topic_index: int | None):
     zhipu_cfg = cfg.get("zhipu_tts", {})
     zhipu_cfg = {**zhipu_cfg, "api_key": os.environ.get("ZHIPU_API_KEY", "")} \
         if narr.get("backend") == "zhipu" else None
-    voices = narrator.narrate(secs, AUD_DIR, voice, narr["rate"],
-                              backend=narr.get("backend", "edge"), zhipu=zhipu_cfg)
+    voices = []
+    for tts_attempt in range(3):
+        try:
+            voices = narrator.narrate(
+                secs, AUD_DIR, voice, narr["rate"],
+                backend=narr.get("backend", "edge"), zhipu=zhipu_cfg,
+                allow_sapi=bool(narr.get("allow_sapi_fallback", False)))
+            break
+        except RuntimeError as e:
+            if tts_attempt == 2:
+                log.error("TTS 神经音色持续不可用，今日不发布（质量闸门：宁缺毋滥，%s）",
+                          str(e)[:60])
+                return
+            log.warning("TTS 不可用(第%d次)，30分钟后自动重试: %s", tts_attempt + 1,
+                        str(e)[:60])
+            time.sleep(1800)
     total = sum(v["duration"] for v in voices)
     log.info("配音完成: %d段 共%.1f秒 (backend=%s, voice=%s)", len(voices), total,
              narr.get("backend", "edge"), voice)

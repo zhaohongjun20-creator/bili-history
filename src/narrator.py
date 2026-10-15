@@ -53,8 +53,14 @@ def _synth_zhipu(text: str, out_path: str, api_key: str, model: str, voice: str)
 
 
 def synth_section(text: str, out_path: str, voice: str, rate: str,
-                  backend: str = "edge", zhipu: dict | None = None) -> str:
-    """按后端合成；zhipu 失败降级 edge；edge 指定音色失败自动换熔断池音色。"""
+                  backend: str = "edge", zhipu: dict | None = None,
+                  allow_sapi: bool = False) -> str:
+    """按后端合成；zhipu 失败降级 edge；edge 指定音色失败自动换熔断池音色。
+
+    质量闸门：神经音色全灭时默认直接抛错（今日不发，等恢复），
+    绝不放 SAPI 机械音上线——"产线可以断，烂片不能发"。
+    allow_sapi=True 时才允许本地 SAPI 兜底（仅供手动救急）。
+    """
     if backend == "zhipu" and zhipu and zhipu.get("api_key"):
         try:
             return _synth_zhipu(text, out_path, zhipu["api_key"],
@@ -74,13 +80,16 @@ def synth_section(text: str, out_path: str, voice: str, rate: str,
                 return out_path
             except Exception:
                 continue
-        # edge 全线失败（微软端封堵）→ 本地 SAPI 终极兜底
-        try:
-            wav = _synth_sapi(text, out_path)
-            print(f"[narrator] edge-tts 全线失败，本地 SAPI 兜底 → {wav}")
-            return wav
-        except Exception as e2:
-            raise RuntimeError(f"edge 与 SAPI 均失败: {e2}")
+        if allow_sapi:
+            try:
+                wav = _synth_sapi(text, out_path)
+                print(f"[narrator] 质量闸门放行(手动模式)：本地 SAPI 兜底 → {wav}")
+                return wav
+            except Exception as e2:
+                raise RuntimeError(f"edge 与 SAPI 均失败: {e2}")
+        raise RuntimeError(
+            "edge-tts 神经音色全部不可用（微软端封堵中）。质量闸门：今日不发布，"
+            "等恢复后自动继续；拒绝 SAPI 机械音上线。")
 
 
 def audio_duration(path: str) -> float:
@@ -95,13 +104,15 @@ def audio_duration(path: str) -> float:
 
 
 def narrate(sections: list, out_dir: str, voice: str, rate: str,
-            backend: str = "edge", zhipu: dict | None = None) -> list:
+            backend: str = "edge", zhipu: dict | None = None,
+            allow_sapi: bool = False) -> list:
     """逐段配音；返回 [{path, duration, text}]。"""
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     results = []
     for i, sec in enumerate(sections):
         mp3 = f"{out_dir}/sec_{i:02d}.mp3"
-        actual = synth_section(sec["text"], mp3, voice, rate, backend=backend, zhipu=zhipu)
+        actual = synth_section(sec["text"], mp3, voice, rate, backend=backend,
+                               zhipu=zhipu, allow_sapi=allow_sapi)
         results.append({"path": actual, "duration": audio_duration(actual),
                         "text": sec["text"]})
     return results
