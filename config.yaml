@@ -71,6 +71,7 @@ douyin:
   enable: false   # B站发布后自动分发抖音（登录态 data/douyin-state.json；失效时重跑 python douyin_bridge.py login 扫码）
 
 bilibili:
+  mid: 1518025639   # 数据回读用
   tid: 239              # 知识·人文历史（原 203 军事分区已被B站下线）
   tags_extra: ["军事历史", "二战", "纪录片", "历史科普"]
 

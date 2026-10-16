@@ -194,6 +194,18 @@ def run(dry_run: bool, topic_index: int | None):
             copyright_self=True)
         store.mark_topic(topic, doc["title"], "published")
         log.info("投稿成功:\n%s", out[-300:])
+        # 数据反馈闭环：记录资产 + 全频道快照战报（借鉴 MatrixMedia / autopilot-shots）
+        import re as _re
+        _m = _re.search(r"BV[0-9A-Za-z]{10}", out)
+        if _m:
+            store.record_video(_m.group(0), doc["title"], "军史")
+            log.info("资产入库: %s", _m.group(0))
+        try:
+            from src import stats as stats_mod
+            stats_mod.collect_and_report(
+                store, int(cfg["bilibili"].get("mid", 1518025639)), log)
+        except Exception as e:
+            log.warning("战报生成异常(不影响发布): %s", e)
     except Exception as e:
         store.mark_topic(topic, doc["title"], f"failed:{e!r}")
         log.exception("投稿失败")
