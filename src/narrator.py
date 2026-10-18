@@ -16,6 +16,26 @@ EDGE_FALLBACK_VOICES = ["zh-CN-YunjianNeural", "zh-CN-YunyangNeural", "zh-CN-Yun
 # 本地 SAPI 兜底语音（微软封堵 edge-tts 免费端点时启用；离线可用，音质略机械）
 SAPI_VOICE = "Microsoft Huihui Desktop"
 
+# Piper 本地神经音色（免费离线、质量介于云端神经与 SAPI 之间；模型在 ../tts_models）
+PIPER_MODEL = str(Path(__file__).resolve().parent.parent.parent / "tts_models"
+                  / "zh_CN-huayan-medium.onnx")
+_piper_voice = None
+
+
+def _synth_piper(text: str, out_path: str) -> str:
+    """Piper 本地神经网络合成（wav）。模型进程内缓存，多次调用零加载开销。"""
+    global _piper_voice
+    import wave as _wave
+    if _piper_voice is None:
+        from piper import PiperVoice
+        _piper_voice = PiperVoice.load(PIPER_MODEL)
+    wav = str(Path(out_path).with_suffix(".wav"))
+    with _wave.open(wav, "wb") as w:
+        _piper_voice.synthesize_wav(text, w)
+    if not Path(wav).exists() or Path(wav).stat().st_size < 5000:
+        raise RuntimeError("piper produced empty audio")
+    return wav
+
 
 def _synth_sapi(text: str, out_path: str) -> str:
     """Windows 本地语音合成（System.Speech，wav 格式），edge 全线失败时的终极兜底。"""
@@ -80,16 +100,21 @@ def synth_section(text: str, out_path: str, voice: str, rate: str,
                 return out_path
             except Exception:
                 continue
-        if allow_sapi:
-            try:
-                wav = _synth_sapi(text, out_path)
-                print(f"[narrator] 质量闸门放行(手动模式)：本地 SAPI 兜底 → {wav}")
-                return wav
-            except Exception as e2:
-                raise RuntimeError(f"edge 与 SAPI 均失败: {e2}")
-        raise RuntimeError(
-            "edge-tts 神经音色全部不可用（微软端封堵中）。质量闸门：今日不发布，"
-            "等恢复后自动继续；拒绝 SAPI 机械音上线。")
+        # edge 全线失败 → Piper 本地神经音色（免费离线，质量可上线）
+        try:
+            wav = _synth_piper(text, out_path)
+            print(f"[narrator] edge-tts 不可用，Piper 本地神经音色接管 → {wav}")
+            return wav
+        except Exception as ep:
+            if allow_sapi:
+                try:
+                    wav = _synth_sapi(text, out_path)
+                    print(f"[narrator] 质量闸门放行(手动模式)：本地 SAPI 兜底 → {wav}")
+                    return wav
+                except Exception as e2:
+                    raise RuntimeError(f"edge/piper/SAPI 均失败: {e2}")
+            raise RuntimeError(
+                f"edge 与 Piper 均不可用（{type(ep).__name__}）。质量闸门：今日不发布。")
 
 
 def audio_duration(path: str) -> float:
