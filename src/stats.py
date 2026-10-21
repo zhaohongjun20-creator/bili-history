@@ -38,7 +38,20 @@ def _bili_cookies() -> list:
         return []
 
 
-def collect(mid: int, max_pages: int = 5) -> list:
+def collect(mid: int, max_pages: int = 5, retries: int = 3) -> list:
+    """读主页全部投稿，返回 [{bvid,title,plays}]。无头+登录cookie；限流时退避重试。"""
+    import time as _time
+    last_err = None
+    for attempt in range(retries):
+        try:
+            return _collect_once(mid, max_pages)
+        except Exception as e:
+            last_err = e
+            _time.sleep(25)          # B站对高频无头访问限流，退避
+    raise last_err
+
+
+def _collect_once(mid: int, max_pages: int) -> list:
     """读主页全部投稿，返回 [{bvid,title,plays}]。无头+登录cookie，失败抛异常由调用方降级。"""
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -58,24 +71,23 @@ def collect(mid: int, max_pages: int = 5) -> list:
             out = {}
             for _ in range(max_pages):
                 page.wait_for_timeout(1500)
-                for bv, title, stats in page.evaluate(
+                for bv, title, playtxt in page.evaluate(
                         """() => {
                     const seen = new Map();
-                    document.querySelectorAll("a[href*='/video/BV']").forEach(a => {
-                        const m = a.href.match(/BV[0-9A-Za-z]+/); if (!m) return;
-                        const card = a.closest('[class*="card"]') || a.parentElement;
+                    document.querySelectorAll('.bili-video-card').forEach(card => {
+                        const a = card.querySelector("a[href*='/video/BV']");
+                        const m = a && a.href.match(/BV[0-9A-Za-z]+/); if (!m) return;
+                        const t = card.querySelector('.bili-video-card__title');
+                        const stats = card.querySelector('.bili-cover-card__stats');
+                        const play = stats ? stats.querySelector('span') : null;
                         if (!seen.has(m[0]))
-                            seen.set(m[0], [(a.getAttribute('title')||a.innerText||'').trim().slice(0,60),
-                                            (card?.innerText||'')]);
+                            seen.set(m[0], [(t && (t.getAttribute('title')||t.innerText)||'').trim(),
+                                            (play ? play.innerText : '0')]);
                     });
                     return [...seen.entries()].map(([k, v]) => [k, v[0], v[1]]);
                 }"""):
-                    lines = [l.strip() for l in stats.split("\n") if l.strip()]
-                    plays = 0
-                    for l in lines:          # 统计行 = 播放|弹幕|时长，取首个纯数字即播放数
-                        if re.match(r"^[\d.]+万?$", l):
-                            plays = _num(l)
-                            break
+                    title = title[:60]
+                    plays = _num(playtxt)
                     out[bv] = {"title": title, "plays": plays}
                 nxt = page.locator("button:has-text('下一页')")
                 if not nxt.count() or "disabled" in (nxt.first.get_attribute("class") or ""):
@@ -107,8 +119,8 @@ def collect_and_report(store, mid: int, log, channel_hint: str = "军史") -> No
     yesterday = (date.today() - timedelta(days=1)).isoformat()
     for r in rows:
         store.upsert_snapshot(r["bvid"], r["plays"], today)
-        clean = r["title"] and "
-" not in r["title"] and "最新" not in r["title"]
+        nl = chr(10)
+        clean = r["title"] and nl not in r["title"] and "最新" not in r["title"]
         if clean and not any(b == r["bvid"] for b, *_ in store.videos_all()):
             store.record_video(r["bvid"], r["title"],
                                _channel_of(r["bvid"], r["title"], known))
