@@ -107,7 +107,9 @@ def collect_and_report(store, mid: int, log, channel_hint: str = "军史") -> No
     yesterday = (date.today() - timedelta(days=1)).isoformat()
     for r in rows:
         store.upsert_snapshot(r["bvid"], r["plays"], today)
-        if not any(b == r["bvid"] for b, *_ in store.videos_all()):
+        clean = r["title"] and "
+" not in r["title"] and "最新" not in r["title"]
+        if clean and not any(b == r["bvid"] for b, *_ in store.videos_all()):
             store.record_video(r["bvid"], r["title"],
                                _channel_of(r["bvid"], r["title"], known))
 
