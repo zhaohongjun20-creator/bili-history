@@ -82,7 +82,8 @@ def run(dry_run: bool, topic_index: int | None):
             voices = narrator.narrate(
                 secs, AUD_DIR, voice, narr["rate"],
                 backend=narr.get("backend", "edge"), zhipu=zhipu_cfg,
-                allow_sapi=bool(narr.get("allow_sapi_fallback", False)))
+                allow_sapi=bool(narr.get("allow_sapi_fallback", False)),
+                cosy=narr.get("cosy"))
             break
         except RuntimeError as e:
             if tts_attempt == 2:

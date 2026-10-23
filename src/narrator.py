@@ -2,7 +2,7 @@
 
 zhipu 后端失败（余额不足/网络）时自动降级到 edge，保证产线不断。
 """
-import asyncio, os, subprocess
+import asyncio, json, os, subprocess
 from pathlib import Path
 import edge_tts
 import requests
@@ -20,6 +20,44 @@ SAPI_VOICE = "Microsoft Huihui Desktop"
 PIPER_MODEL = str(Path(__file__).resolve().parent.parent.parent / "tts_models"
                   / "zh_CN-huayan-medium.onnx")
 _piper_voice = None
+
+# CosyVoice2 本地大模型（Apache-2.0，质量第一梯队；环境在 ../cosyvoice）
+_COSY_ROOT = Path(__file__).resolve().parent.parent.parent / "cosyvoice"
+_COSY_PY = _COSY_ROOT / ".venv" / "Scripts" / "python.exe"
+_COSY_CLI = _COSY_ROOT / "synth_cli.py"
+
+
+def _synth_cosy_batch(sections: list, out_dir: str, cosy: dict) -> list[str]:
+    """CosyVoice2 批量合成（子进程一次加载模型，全部段落出片后返回 wav 路径）。
+
+    任一段失败即抛错，由调用方降级到旧链路。两种配方（cosy 配置里选）：
+    - mode=zero_shot + spk:      预注册音色 ID（register_voice.py 注册）
+    - mode=instruct2 + prompt_wav + instruct: 参考音频 + 风格指令（实测音质最优，
+      男声低沉纪录片腔 = repo/asset/cross_lingual_prompt.wav + 低沉严肃指令）
+    """
+    if not (_COSY_PY.exists() and _COSY_CLI.exists()):
+        raise RuntimeError(f"cosyvoice env missing: {_COSY_PY}")
+    if cosy.get("mode", "zero_shot") == "instruct2":
+        base = {"mode": "instruct2", "prompt_wav": str(_COSY_ROOT / cosy["prompt_wav"]),
+                "instruct": cosy["instruct"]}
+    else:
+        base = {"spk_id": cosy["spk"]}
+    jobs = [{**base, "text": s["text"],
+             "out": str((Path(out_dir) / f"sec_{i:02d}.wav").resolve())}
+            for i, s in enumerate(sections)]  # 必须绝对路径：子进程 cwd 在 cosyvoice 目录
+    manifest = _COSY_ROOT / "_jobs.json"
+    manifest.write_text(json.dumps({"jobs": jobs}, ensure_ascii=False),
+                        encoding="utf-8")
+    r = subprocess.run([str(_COSY_PY), str(_COSY_CLI), str(manifest)],
+                       capture_output=True, text=True, timeout=3600,
+                       cwd=str(_COSY_ROOT))
+    print(f"[narrator] cosy batch:\n{r.stdout.strip()}")
+    outs = [j["out"] for j in jobs]
+    missing = [o for o in outs if not Path(o).exists()]
+    if missing or r.returncode != 0:
+        raise RuntimeError(f"cosy batch incomplete: missing={missing} "
+                           f"err={r.stderr.strip()[:200]}")
+    return outs
 
 
 def _synth_piper(text: str, out_path: str) -> str:
@@ -130,9 +168,21 @@ def audio_duration(path: str) -> float:
 
 def narrate(sections: list, out_dir: str, voice: str, rate: str,
             backend: str = "edge", zhipu: dict | None = None,
-            allow_sapi: bool = False) -> list:
-    """逐段配音；返回 [{path, duration, text}]。"""
+            allow_sapi: bool = False, cosy: dict | None = None) -> list:
+    """逐段配音；返回 [{path, duration, text}]。
+
+    cosy 配置存在且 enable 时优先走 CosyVoice2 本地大模型批量合成（质量最优），
+    失败自动降级 edge→熔断池→Piper 旧链路，产线不断。
+    """
     Path(out_dir).mkdir(parents=True, exist_ok=True)
+    if cosy and cosy.get("enable"):
+        try:
+            paths = _synth_cosy_batch(sections, out_dir, cosy)
+            print(f"[narrator] CosyVoice2 大模型音色接管（{len(paths)}段）")
+            return [{"path": p, "duration": audio_duration(p), "text": s["text"]}
+                    for p, s in zip(paths, sections)]
+        except Exception as e:
+            print(f"[narrator] CosyVoice2 失败，降级旧链路: {e}")
     results = []
     for i, sec in enumerate(sections):
         mp3 = f"{out_dir}/sec_{i:02d}.mp3"
