@@ -145,9 +145,13 @@ def run(dry_run: bool, topic_index: int | None):
 
     fade = float(cfg.get("transition", {}).get("fade_seconds", 0.6))
     modes = ["in", "panright", "out", "panleft"]
-    section_files, credits, quotes = [], [], []
+    credits, quotes = [], []
     from urllib.parse import urlparse as _up
     from src.sticker import resolve_stickers
+    from concurrent.futures import ThreadPoolExecutor
+
+    # 阶段一（快）：集中下载配图、准备贴纸与运镜参数
+    render_jobs = []
     for i, (sec, v) in enumerate(zip(secs, voices)):
         im = pool_imgs[i % len(pool_imgs)]
         ext = Path(_up(im["url"]).path).suffix.lower() or ".jpg"
@@ -167,12 +171,22 @@ def run(dry_run: bool, topic_index: int | None):
         # 尾部留 fade 秒（除末段）：旁白说完画面停留后溶解切换
         tail = 0.0 if i == len(secs) - 1 else fade
         v["tail"] = tail
-        clip = f"{DL_DIR}/sec_{i:02d}.mp4"
-        slideshow.build_section_clip(p, v["path"], v["duration"] + tail, clip,
-                                     mode=modes[i % 4], stickers=stickers)
-        section_files.append(clip)
-        log.info("段落%d %.1fs(+%.1f尾) 运镜=%s 配图=%s",
-                 i, v["duration"], tail, modes[i % 4], im["title"][5:40])
+        render_jobs.append((i, p, v, tail, modes[i % 4], stickers, im))
+
+    # 阶段二（慢）：6 路并行渲染段落（每段独立 ffmpeg，24 逻辑核吃得下，
+    # 串行时单条渲染 40min → 并行后 ~10min）
+    log.info("并行渲染 %d 段（6 workers）...", len(render_jobs))
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futs = {pool.submit(
+                    slideshow.build_section_clip, p, v["path"],
+                    v["duration"] + tail, f"{DL_DIR}/sec_{i:02d}.mp4",
+                    mode=m, stickers=s): (i, im, v, tail, m)
+                for i, p, v, tail, m, s, im in render_jobs}
+        for fut, (i, im, v, tail, m) in futs.items():  # 按提交序收取（dict 保序）
+            fut.result()  # 任一段失败即抛错（与原串行行为一致）
+            log.info("段落%d %.1fs(+%.1f尾) 运镜=%s 配图=%s",
+                     i, v["duration"], tail, m, im["title"][5:40])
+    section_files = [f"{DL_DIR}/sec_{i:02d}.mp4" for i in range(len(render_jobs))]
 
     # ⑤ 合成（xfade 转场轮换 + BGM ducking + 字幕烧录）
     bgms = sorted(Path(cfg["bgm_dir"]).glob("*.mp3"))
