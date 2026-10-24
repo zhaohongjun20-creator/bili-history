@@ -173,10 +173,10 @@ def run(dry_run: bool, topic_index: int | None):
         v["tail"] = tail
         render_jobs.append((i, p, v, tail, modes[i % 4], stickers, im))
 
-    # 阶段二（慢）：6 路并行渲染段落（每段独立 ffmpeg，24 逻辑核吃得下，
-    # 串行时单条渲染 40min → 并行后 ~10min）
-    log.info("并行渲染 %d 段（6 workers）...", len(render_jobs))
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    # 阶段二（慢）：4 路并行渲染段落（每段独立 ffmpeg；并发 6 时重段落会被
+    # CPU 饿死触发超时，降到 4 留余量；timeout 也放宽到 1500s 双保险）
+    log.info("并行渲染 %d 段（4 workers）...", len(render_jobs))
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futs = {pool.submit(
                     slideshow.build_section_clip, p, v["path"],
                     v["duration"] + tail, f"{DL_DIR}/sec_{i:02d}.mp4",

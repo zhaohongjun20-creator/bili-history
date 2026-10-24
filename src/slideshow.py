@@ -56,7 +56,7 @@ def build_section_clip(img: str, voice_mp3: str, duration: float, out_mp4: str,
         cmd += ["-filter_complex", fc, "-map", "[v]", "-map", "1:a"]
     cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-shortest", out_mp4]
-    subprocess.run(cmd, check=True, capture_output=True, timeout=600)
+    subprocess.run(cmd, check=True, capture_output=True, timeout=1500)
     return out_mp4
 
 
