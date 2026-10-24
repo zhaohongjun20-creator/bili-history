@@ -34,8 +34,37 @@ def load_config():
         return yaml.safe_load(f)
 
 
+_lock_acquired = False
+
+
+def _try_lock() -> bool:
+    """产线互斥锁：批量连发/手动运行与定时任务并发时，后到者直接退出，
+    防止选题撞车与 GPU 抢占。锁文件 6 小时自动失效（防崩溃残留死锁）。"""
+    global _lock_acquired
+    import time
+    lock = Path(".autopost.lock")
+    if lock.exists():
+        try:
+            if time.time() - lock.stat().st_mtime < 6 * 3600:
+                return False
+            logging.getLogger("main").warning("发现残留锁(>6h)，视为死锁并接管")
+        except OSError:
+            pass
+    lock.write_text(str(os.getpid()))
+    _lock_acquired = True
+    return True
+
+
+def _release_lock():
+    if _lock_acquired:
+        Path(".autopost.lock").unlink(missing_ok=True)
+
+
 def run(dry_run: bool, topic_index: int | None):
     log = logging.getLogger("main")
+    if not _try_lock():
+        log.warning("另一实例运行中（.autopost.lock），本次退出")
+        return
     load_dotenv()
     cfg = load_config()
     store = Store(f"{DATA_DIR}/topics.db")
@@ -228,4 +257,7 @@ if __name__ == "__main__":
     ap.add_argument("topic", nargs="?", type=int, help="主题序号(从1)")
     args = ap.parse_args()
     setup_logging()
-    run(args.dry_run, args.topic)
+    try:
+        run(args.dry_run, args.topic)
+    finally:
+        _release_lock()
