@@ -15,7 +15,7 @@ OUTLINE_PROMPT = """你是B站军事历史区编导，策划一期战争史科�
 {{"title": "标题规则见下，30字内中文标题，不用感叹号",
   "tags": ["6个中文标签"],
   "sections": [{{"point": "该段要讲的史实要点（一句话，含具体细节如时间地点数字；若玩梗在此注明梗的位置和内容）",
-                 "image_query": "2-4个英文单词的Wikimedia搜索词，如 'Midway aircraft 1942'",
+                 "image_query": "2-4个英文单词的Wikimedia搜索词，如 'Midway aircraft 1942'。必须以战役地名/武器名开头（如 El Alamein/Tobruk/Tiger tank），禁止只用人物姓氏——人名会匹配到同名城市（Montgomery将军→阿拉巴马州蒙哥马利市）",
                  "stickers": [{{"emoji": "一个emoji字符", "at": 0.5, "why": "情绪点说明"}}],
                  "quote": {{"text": "名言原文", "author": "出自谁", "context": "何时何地说/写"}}}}]}}
 共 {n_min}-{n_max} 段，构成起承转合。

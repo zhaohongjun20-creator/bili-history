@@ -41,18 +41,35 @@ def _license_ok(extmeta: dict) -> bool:
     return any(lic.startswith(k) or lic == k for k in OK_LICENSES) or "public domain" in lic
 
 
+def _title_tokens(q: str) -> set:
+    return {t for t in re.split(r"[^a-z0-9]+", q.lower()) if len(t) >= 4}
+
+
 def search_images(query: str, limit: int = 4) -> list:
-    """返回 [{title, url, license, author}]，仅含许可合规图片。"""
+    """返回 [{title, url, license, author}]，仅含许可合规图片。
+
+    相关性闸门：标题必须含查询词的实词 token 之一（防人名撞地名：
+    搜 Montgomery 将军 结果全是阿拉巴马州首府照片这类事故）。
+    同系列图（前3词相同）最多取 2 张，防整池同款。
+    """
     data = _get_with_retry({
         "action": "query", "format": "json", "generator": "search",
         "gsrsearch": query, "gsrnamespace": 6, "gsrlimit": limit,
         "prop": "imageinfo", "iiprop": "url|extmetadata|size",
     })
     pages = (data.get("query") or {}).get("pages") or {}
-    out = []
+    out, family = [], {}
+    toks = _title_tokens(query)
     for p in pages.values():
         ii = (p.get("imageinfo") or [{}])[0]
         meta = ii.get("extmetadata") or {}
+        title_l = p["title"].lower()
+        if toks and not any(t in title_l for t in toks):
+            continue
+        key = " ".join(title_l.split(":")[-1].split()[:3])  # 系列图家族键
+        family[key] = family.get(key, 0) + 1
+        if family[key] > 2:
+            continue
         if not _license_ok(meta):
             continue
         ext = Path(urlparse(ii.get("url", "")).path).suffix.lower()

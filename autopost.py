@@ -129,7 +129,7 @@ def run(dry_run: bool, topic_index: int | None):
     # ④ 配图（主池策略：主题核心词 1-2 次大搜索拉满池，段落按序取图；
     #          池不足时才用各段 image_query 补搜——请求量从 20+ 降到 2-4 次）
     core_queries = list(dict.fromkeys(
-        " ".join(sec["image_query"].split()[:2]) for sec in secs))[:2]
+        " ".join(sec["image_query"].split()[:3]) for sec in secs))[:2]
     pool_imgs = []
     for q in core_queries:
         pool_imgs += wikiimg.search_images(q, limit=max(15, len(secs)))
