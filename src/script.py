@@ -46,14 +46,16 @@ TITLE_FIX_PROMPT = """原标题「{title}」是平铺直叙的教科书式命名
 
 视频主题：{topic}"""
 
+_LABEL_RE = re.compile(r"反差错位|悬念留白|具体数字|错误类比|钩子")
 _HOOK_RE = re.compile(
     r"到底|为什么|凭什么|为何|竟然|居然|究竟|谁|背后|真相|秘密|无人|没人"
     r"|把.{1,8}当|却|反被|败给|骗过|逼疯|终结|末路|翻车|救了|毁掉|\d|[?？]")
 
 
 def _has_hook(title: str) -> bool:
-    """标题钩子检测：命中任一钩子结构且非教科书式命名。"""
-    return bool(title) and len(title) <= 40 and bool(_HOOK_RE.search(title))
+    """标题钩子检测：命中钩子结构、非教科书式命名、且不带结构标签词面。"""
+    return (bool(title) and len(title) <= 40
+            and bool(_HOOK_RE.search(title)) and not _LABEL_RE.search(title))
 
 
 def _refine_title(api_key: str, title: str, topic: str, model: str) -> str:
