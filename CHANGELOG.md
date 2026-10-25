@@ -2,6 +2,26 @@
 
 本格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化。
 
+## [0.7.3] - 2026-10-26
+
+锁所有权生命周期收口（三轮审查 P1）+ 审查结构校验收紧 + 投稿恢复登记路径测试。
+
+### 修复
+- **锁被接管后旧持有者误删新锁**（三轮审查 P1）：`release()` 旧实现无条件 unlink——
+  旧进程被判定挂死、锁被接管后恢复运行时，会把新持有者的锁删掉，导致第三进程
+  同时进入生产。现 release/heartbeat 均先校验锁文件内容 pid 归属：已失去所有权
+  只放弃持有状态，绝不动别人的锁；接管判定与 rename 之间加 mtime 复查
+  （心跳刷新过则放弃接管），收窄 TOCTOU 窗口。
+- cnnum 裸小数丢精度（3.5→"三"）已于 0.7.2 修复，本轮补回归测试。
+
+### 新增（测试，共 90 项）
+- 锁：接管后旧持有者 release 不删新锁、所有权丢失后心跳停止刷新、
+  4 线程并发接管同一过期锁单赢家、锁文件被外部删除后 release 不抛错。
+- 审查：verdict 缺失、problems 非列表（字符串/数字）判结构非法 → ReviewUnavailable；
+  requests.Timeout 重试后失败；problems 内单个非法元素容错不崩溃。
+- 投稿恢复 e2e：超时 uncertain → `--mark-uploaded` 登记 BV（store published +
+  record_video + manifest upload done + publish.bvid）→ 重跑零上传调用。
+
 ## [0.7.2] - 2026-10-26
 
 真实 dry-run 实测后修复两处历史遗留的音画缺陷（质检首战建功），补交付基建。

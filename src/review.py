@@ -85,6 +85,9 @@ def _ask_reviewer(api_key: str, title: str, desc: str, secs: list,
     out = json.loads(m.group(1) if m.groups() else m.group(0)) if m else None
     if not isinstance(out, dict) or out.get("verdict") not in ("pass", "fix", "reject"):
         raise ValueError(f"审查返回无法解析: {str(raw)[:120]}")
+    # problems 非列表属结构非法（fix 缺 title_fix 是合法响应：无修法走人工闸门）
+    if not isinstance(out.get("problems") or [], list):
+        raise ValueError(f"审查返回 problems 不是列表: {str(raw)[:120]}")
     return out
 
 

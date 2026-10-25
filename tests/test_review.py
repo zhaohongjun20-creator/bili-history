@@ -37,6 +37,52 @@ def test_unknown_verdict_rejected(monkeypatch):
                       [{"text": "无数字旁白" * 10}], [], retries=1)
 
 
+def test_missing_verdict_rejected(monkeypatch):
+    """JSON 合法但缺 verdict 字段 → 无效返回。"""
+    monkeypatch.setattr(review.requests, "post",
+                        _fake_post('{"problems": [], "severity": "low"}'))
+    with pytest.raises(review.ReviewUnavailable):
+        review.review("k", "为什么这场战役只用了7天", "d",
+                      [{"text": "无数字旁白" * 10}], [], retries=0)
+
+
+def test_problems_not_a_list_rejected(monkeypatch):
+    """problems 不是列表（字符串/数字）→ 结构非法 → ReviewUnavailable。"""
+    for bad in ('{"verdict": "pass", "problems": "没有问题"}',
+                '{"verdict": "pass", "problems": 123}'):
+        monkeypatch.setattr(review.requests, "post", _fake_post(bad))
+        with pytest.raises(review.ReviewUnavailable):
+            review.review("k", "为什么这场战役只用了7天", "d",
+                          [{"text": "无数字旁白" * 10}], [], retries=0)
+
+
+def test_garbage_problem_entries_tolerated_not_published_risk(monkeypatch):
+    """problems 内单个元素非法（None/嵌套异常）不崩溃，最多丢失该条；verdict 合法仍可用。"""
+    body = ('{"verdict": "pass", "problems": [null, 42, {"issue": "配图偏现代",'
+            ' "section": 2, "severity": "medium", "suggest": "核对"}], "title_fix": ""}')
+    monkeypatch.setattr(review.requests, "post", _fake_post(body))
+    out = review.review("k", "为什么这场战役只用了7天", "d",
+                        [{"text": "无数字旁白" * 10}], [])
+    assert out["verdict"] == "pass"
+    assert any("配图偏现代" in p for p in out["problems"])
+
+
+def test_service_timeout_raises(monkeypatch):
+    """请求超时（requests.Timeout 是 RequestException 子类）→ 重试后 ReviewUnavailable。"""
+    import requests as _rq
+    calls = []
+
+    def timeout_post(*a, **kw):
+        calls.append(1)
+        raise _rq.Timeout("timed out")
+
+    monkeypatch.setattr(review.requests, "post", timeout_post)
+    with pytest.raises(review.ReviewUnavailable):
+        review.review("k", "为什么这场战役只用了7天", "d",
+                      [{"text": "无数字旁白" * 10}], [], retries=1)
+    assert len(calls) == 2
+
+
 def _fake_post(content: str, fail_first=0, calls=None):
     """构造 requests.post 替身：前 fail_first 次抛连接错误，之后返回 content。"""
     import requests

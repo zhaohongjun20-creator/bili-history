@@ -236,6 +236,33 @@ def test_uncertain_upload_blocks_auto_retry(env, monkeypatch):
     assert store.get_topic("集成测试主题")["status"] == "published"
 
 
+def test_mark_uploaded_registers_bv_and_prevents_reupload(env, monkeypatch):
+    """人工核实平台已收到 → --mark-uploaded 登记 BV；之后任何重跑都不再上传。"""
+    log = __import__("logging").getLogger("main9")
+    store = Store(str(env["tmp"] / "data" / "topics.db"))
+    def timeout_upload(*a, **kw):
+        raise autopost.sau_bridge.UploadError("命令超时，平台状态未核实", code=-1)
+    monkeypatch.setattr(autopost.sau_bridge, "upload", timeout_upload)
+    autopost._pipeline(store, env["cfg"], None, log, dry_run=False,
+                       redo=False, fresh=False)
+    # 人工核实已收到 → 登记 BV
+    autopost._mark_uploaded(store, env["cfg"], 1, "BV1manual001", log)
+    topic = store.get_topic("集成测试主题")
+    assert topic["status"] == "published"
+    assert ("BV1manual001", topic["title"], "军史") in store.videos_all()
+    job_dir = next((env["tmp"] / "data" / "jobs").iterdir())
+    m = json.loads((job_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert m["stages"]["upload"]["status"] == "done"
+    assert m["publish"]["bvid"] == "BV1manual001"
+    # 重跑：选题已 published 不会被领取；upload 已 done 也绝不重复上传
+    def boom(*a, **kw):
+        raise AssertionError("重复投稿！upload 已 done 还在调用上传")
+    monkeypatch.setattr(autopost.sau_bridge, "upload", boom)
+    autopost._pipeline(store, env["cfg"], 1, log, dry_run=False,
+                       redo=False, fresh=False)
+    assert store.get_topic("集成测试主题")["status"] == "published"
+
+
 def test_image_assignment_binding_and_reuse_annotation(env, monkeypatch):
     """配图分配：每段绑定具体来源；池不足时有序复用且审查可见复用标记。"""
     log = __import__("logging").getLogger("main7")

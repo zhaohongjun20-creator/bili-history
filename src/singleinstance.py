@@ -64,35 +64,60 @@ class InstanceLock:
     def __init__(self, path: str | Path, stale_seconds: float = STALE_SECONDS):
         self.path = Path(path)
         self.stale_seconds = stale_seconds
-        self._fd = None
+        self._owned = False       # 是否仍持有所有权（被接管后置 False，释放不再删文件）
+        self._pid = 0
 
     # ── 获取/释放 ──────────────────────────────────────────
     def acquire(self, log=None) -> bool:
         """原子获取；被占用时检查过期，过期则接管。失败返回 False。"""
         for _ in range(3):                      # 接管后允许重试一次创建
             try:
-                self._fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 break
             except FileExistsError:
                 if not self._takeover_stale(log):
                     return False
         else:
             return False
-        info = {"pid": os.getpid(), "host": socket.gethostname(),
+        self._pid = os.getpid()
+        info = {"pid": self._pid, "host": socket.gethostname(),
                 "started_at": time.strftime("%Y-%m-%d %H:%M:%S")}
-        os.write(self._fd, json.dumps(info, ensure_ascii=False).encode("utf-8"))
-        os.close(self._fd)
-        self._fd = None
+        os.write(fd, json.dumps(info, ensure_ascii=False).encode("utf-8"))
+        os.close(fd)
+        self._owned = True
         return True
 
+    def _is_mine(self) -> bool:
+        """锁文件是否仍归本进程所有（防接管后旧进程误删新持有者的锁）。"""
+        try:
+            content = self.path.read_text(encoding="utf-8")
+        except OSError:
+            return False                         # 文件没了：所有权自然消失
+        pid = _lock_pid(content)
+        return pid is None or pid == self._pid   # 解析失败视为自己写的（写入是原子的）
+
     def release(self):
+        """释放锁。仅在仍持有时删除；锁已被他人接管/重建时只放弃所有权，
+        绝不删除别人的锁文件（方案 P1：接管后旧持有者延迟释放的竞态）。"""
+        if not self._owned:
+            return
+        if not self._is_mine():
+            self._owned = False                  # 已被接管：放弃，不动文件
+            return
         try:
             self.path.unlink()
         except FileNotFoundError:
             pass
+        self._owned = False
 
     def heartbeat(self):
-        """长任务阶段间刷新 mtime，防止运行中超时被误判死锁。"""
+        """长任务阶段间刷新 mtime，防止运行中被判挂死接管。
+        所有权丢失（被接管）后停止刷新，不再碰别人的锁。"""
+        if not self._owned:
+            return
+        if not self._is_mine():
+            self._owned = False                  # 已被接管：放弃所有权
+            return
         try:
             os.utime(self.path, None)
         except OSError:
@@ -131,11 +156,14 @@ class InstanceLock:
             if log:
                 log.warning("发现无主残留锁(%.1fh>%.1fh, %r)，回收接管",
                             age / 3600, self.stale_seconds / 3600, holder[:40])
+        # TOCTOU 收口：接管判定与改名之间若持有者心跳刷新过，放弃接管
         try:
+            if time.time() - self.path.stat().st_mtime > age + 0.05:
+                return False
             self.path.rename(self.path.with_suffix(".stale"))   # 原子让位
-            self.path.with_suffix(".stale").unlink(missing_ok=True)
         except OSError:
-            return False
+            return False                         # 已被并发接管/释放
+        self.path.with_suffix(".stale").unlink(missing_ok=True)
         return True
 
     # ── 上下文管理：释放必然执行 ──────────────────────────
