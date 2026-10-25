@@ -37,12 +37,13 @@ def _synth_cosy_batch(sections: list, out_dir: str, cosy: dict) -> list[str]:
     """
     if not (_COSY_PY.exists() and _COSY_CLI.exists()):
         raise RuntimeError(f"cosyvoice env missing: {_COSY_PY}")
+    from .cnnum import normalize as _cn  # 数字→汉字：旁路 cosy TN（"1944年"会被读成"十九四四年"）
     if cosy.get("mode", "zero_shot") == "instruct2":
         base = {"mode": "instruct2", "prompt_wav": str(_COSY_ROOT / cosy["prompt_wav"]),
                 "instruct": cosy["instruct"]}
     else:
         base = {"spk_id": cosy["spk"]}
-    jobs = [{**base, "text": s["text"],
+    jobs = [{**base, "text": _cn(s["text"]),
              "out": str((Path(out_dir) / f"sec_{i:02d}.wav").resolve())}
             for i, s in enumerate(sections)]  # 必须绝对路径：子进程 cwd 在 cosyvoice 目录
     manifest = _COSY_ROOT / "_jobs.json"
