@@ -55,7 +55,9 @@ def build_section_clip(img: str, voice_mp3: str, duration: float, out_mp4: str,
         fc = f"[0:v]{vf}[v]"
         cmd += ["-filter_complex", fc, "-map", "[v]", "-map", "1:a"]
     cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k", "-shortest", out_mp4]
+            "-c:a", "aac", "-b:a", "192k", out_mp4]
+    # 注意：不能加 -shortest——它会把视频在旁白结束时截断，"画面停留 fade 秒再溶解"
+    # 的设计失效，且总长比音频/字幕短 fade*(n-1)（QC 曾实测字幕超出视频 11s）
     subprocess.run(cmd, check=True, capture_output=True, timeout=1500)
     return out_mp4
 
@@ -69,12 +71,16 @@ def _fmt_ts(seconds: float) -> str:
 
 
 def make_srt(narrations: list, path: str) -> str:
-    """每段旁白一条字幕，时间轴按段起点对齐（含转场偏移）。"""
+    """每段旁白一条字幕，时间轴按段起点对齐。
+
+    段起点 = 此前各段旁白时长之和（尾部停留 fade 秒被 xfade 重叠吃掉，
+    不是顺序累加——按 duration+tail 累加会让字幕逐段漂移、超出成片）。
+    """
     lines, t0 = [], 0.0
     for i, n in enumerate(narrations, 1):
         lines += [str(i), f"{_fmt_ts(t0)} --> {_fmt_ts(t0 + n['duration'])}",
                   n["text"].replace("\n", " "), ""]
-        t0 += n["duration"] + n.get("tail", 0.0)
+        t0 += n["duration"]
     Path(path).write_text("\n".join(lines), encoding="utf-8")
     return path
 
@@ -149,7 +155,7 @@ def compose_final(section_files: list, bgm_path: str, srt_path: str,
     fc_c = (f"[1:a]asplit=2[voice][key];"
             f"[2:a]volume={bgm_volume}[bg];"
             f"[bg][key]sidechaincompress=threshold=0.02:ratio=6:attack=150:release=900[bgd];"
-            f"[voice][bgd]amix=inputs=2:duration=first:normalize=0[aout];"
+            f"[voice][bgd]amix=inputs=2:duration=first:normalize=0,volume=0.85[aout];"
             f"[0:v]subtitles={Path(srt_path).as_posix()}"
             f":force_style='{style}'[vout]")
     cmd_c = [ffmpeg, "-y", "-i", v_only, "-i", a_only,

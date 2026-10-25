@@ -49,7 +49,8 @@ LOG_DIR, DATA_DIR = "logs", "data"
 JOBS_DIR = Path(DATA_DIR) / "jobs"
 
 # 缓存键版本号：提示词/流程实质变更时 +1，让旧缓存自然失效
-V_SCRIPT, V_REVIEW, V_TTS, V_IMG, V_CLIP, V_COMPOSE = "v1", "v1", "v1", "v1", "v1", "v1"
+# v2: 段落渲染去掉 -shortest（画面停留修复）+ 混音 0.85 余量 + SRT 时间轴修正
+V_SCRIPT, V_REVIEW, V_TTS, V_IMG, V_CLIP, V_COMPOSE = "v1", "v1", "v1", "v1", "v2", "v2"
 
 
 class StageError(RuntimeError):
