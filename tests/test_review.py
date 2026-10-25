@@ -56,15 +56,45 @@ def test_problems_not_a_list_rejected(monkeypatch):
                           [{"text": "无数字旁白" * 10}], [], retries=0)
 
 
-def test_garbage_problem_entries_tolerated_not_published_risk(monkeypatch):
-    """problems 内单个元素非法（None/嵌套异常）不崩溃，最多丢失该条；verdict 合法仍可用。"""
-    body = ('{"verdict": "pass", "problems": [null, 42, {"issue": "配图偏现代",'
+def test_invalid_problem_elements_rejected(monkeypatch):
+    """逐元素 schema 校验：任一元素非法 → 整体无效 → ReviewUnavailable（不静默过滤）。"""
+    bad_bodies = [
+        '{"verdict": "pass", "problems": [null]}',                       # 非对象
+        '{"verdict": "pass", "problems": [{}]}',                         # 缺 issue
+        '{"verdict": "pass", "problems": [{"issue": " ", "section": -1, "severity": "low"}]}',  # issue 空白
+        '{"verdict": "pass", "problems": [{"issue": "x", "section": "2", "severity": "low"}]}', # section 非整数
+        '{"verdict": "pass", "problems": [{"issue": "x", "section": -2, "severity": "low"}]}',  # section 越界
+        '{"verdict": "pass", "problems": [{"issue": "x", "section": -1, "severity": "unknown"}]}',  # severity 非法
+        '{"verdict": "pass", "problems": [{"issue": "x", "section": -1, "severity": "low", "suggest": 3}]}',  # suggest 非字符串
+    ]
+    for bad in bad_bodies:
+        monkeypatch.setattr(review.requests, "post", _fake_post(bad))
+        with pytest.raises(review.ReviewUnavailable):
+            review.review("k", "为什么这场战役只用了7天", "d",
+                          [{"text": "无数字旁白" * 10}], [], retries=0)
+
+
+def test_pass_with_nonempty_problems_is_contradiction(monkeypatch):
+    """pass 携带非空 problems = 结论矛盾：不得默默保留 pass 丢弃问题。"""
+    body = ('{"verdict": "pass", "problems": [{"issue": "第2段配图存疑",'
             ' "section": 2, "severity": "medium", "suggest": "核对"}], "title_fix": ""}')
+    monkeypatch.setattr(review.requests, "post", _fake_post(body))
+    with pytest.raises(review.ReviewUnavailable):
+        review.review("k", "为什么这场战役只用了7天", "d",
+                      [{"text": "无数字旁白" * 10}], [], retries=0)
+
+
+def test_valid_schema_accepted(monkeypatch):
+    """完整合法结构正常通过；problems 规范化为可读字符串 + details 保留结构。"""
+    body = ('{"verdict": "fix", "severity": "medium", "problems": ['
+            '{"issue": "第2段配图偏现代", "section": 2, "severity": "medium", "suggest": "核对年代"}],'
+            ' "title_fix": ""}')
     monkeypatch.setattr(review.requests, "post", _fake_post(body))
     out = review.review("k", "为什么这场战役只用了7天", "d",
                         [{"text": "无数字旁白" * 10}], [])
-    assert out["verdict"] == "pass"
-    assert any("配图偏现代" in p for p in out["problems"])
+    assert out["verdict"] == "fix"
+    assert out["problems"][0].startswith("第2段[medium]")
+    assert out["details"][0]["section"] == 2
 
 
 def test_service_timeout_raises(monkeypatch):
@@ -121,13 +151,13 @@ def test_illegal_json_retries_then_raises(monkeypatch):
 
 
 def test_valid_verdict_parsed(monkeypatch):
-    body = ('```json\n{"verdict": "pass", "severity": "low", "problems": '
+    body = ('```json\n{"verdict": "fix", "severity": "medium", "problems": '
             '[{"issue": "配图偏现代", "section": 2, "severity": "medium",'
             ' "suggest": "核对拍摄年代"}], "title_fix": ""}\n```')
     monkeypatch.setattr(review.requests, "post", _fake_post(body))
     out = review.review("k", "为什么这场战役只用了7天", "d",
                         [{"text": "无数字旁白" * 10}], [])
-    assert out["verdict"] == "pass"
+    assert out["verdict"] == "fix"
     assert out["problems"][0].startswith("第2段")
     assert out["details"][0]["section"] == 2
 
@@ -141,7 +171,7 @@ def test_title_fix_rejected_if_no_hook(monkeypatch):
 
 
 def test_high_severity_survives_for_human_gate(monkeypatch):
-    body = ('{"verdict": "pass", "severity": "high", "problems": '
+    body = ('{"verdict": "fix", "severity": "high", "problems": '
             '[{"issue": "伤亡数字存疑", "section": -1, "severity": "high",'
             ' "suggest": "核对战史"}], "title_fix": ""}')
     monkeypatch.setattr(review.requests, "post", _fake_post(body))

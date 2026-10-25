@@ -686,7 +686,9 @@ def run(dry_run: bool, topic_index: int | None, redo: bool = False,
 
     lock = InstanceLock(ROOT / ".autopost.lock")
     if not lock.acquire(log):
-        log.warning("另一实例运行中（.autopost.lock），本次退出")
+        log.warning("另一实例运行中，本次退出（%s）。若人工确认该进程已挂死："
+                    "taskkill /PID <pid> 后重跑（OS 锁随进程死亡自动释放）",
+                    lock.holder_info())
         return
     try:
         if publish_only:

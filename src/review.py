@@ -63,9 +63,36 @@ def _deterministic(title: str, secs: list) -> list:
     return issues
 
 
+_VALID_SEVERITIES = ("low", "medium", "high")
+
+
+def _validate_problems(problems) -> None:
+    """逐元素 schema 校验，任一非法即整体无效（fail-closed，不静默过滤）。
+
+    规则：issue 非空字符串；section 为 ≥-1 的整数（bool 不算）；severity
+    三值枚举；suggest 缺省空、出现则须为字符串。
+    """
+    if not isinstance(problems, list):
+        raise ValueError(f"problems 不是列表: {problems!r}")
+    for p in problems:
+        if not isinstance(p, dict):
+            raise ValueError(f"problems 元素不是对象: {p!r}")
+        issue = p.get("issue")
+        if not isinstance(issue, str) or not issue.strip():
+            raise ValueError(f"problems 元素 issue 缺失或为空: {p!r}")
+        sec = p.get("section", -1)
+        if isinstance(sec, bool) or not isinstance(sec, int) or sec < -1:
+            raise ValueError(f"problems 元素 section 非法: {p!r}")
+        if p.get("severity") not in _VALID_SEVERITIES:
+            raise ValueError(f"problems 元素 severity 非法: {p!r}")
+        sug = p.get("suggest", "")
+        if sug is not None and not isinstance(sug, str):
+            raise ValueError(f"problems 元素 suggest 非字符串: {p!r}")
+
+
 def _ask_reviewer(api_key: str, title: str, desc: str, secs: list,
                   image_titles: list, model: str) -> dict:
-    """单次审查请求，返回解析后的 dict；解析失败抛 ValueError。"""
+    """单次审查请求，返回解析且结构合法的 dict；任何结构问题抛 ValueError。"""
     sec_lines = "\n".join(
         f"第{i}段：{s['text'][:80]}…… → 配图: {image_titles[i] if i < len(image_titles) else '（无）'}"
         for i, s in enumerate(secs))
@@ -85,9 +112,10 @@ def _ask_reviewer(api_key: str, title: str, desc: str, secs: list,
     out = json.loads(m.group(1) if m.groups() else m.group(0)) if m else None
     if not isinstance(out, dict) or out.get("verdict") not in ("pass", "fix", "reject"):
         raise ValueError(f"审查返回无法解析: {str(raw)[:120]}")
-    # problems 非列表属结构非法（fix 缺 title_fix 是合法响应：无修法走人工闸门）
-    if not isinstance(out.get("problems") or [], list):
-        raise ValueError(f"审查返回 problems 不是列表: {str(raw)[:120]}")
+    _validate_problems(out.get("problems") or [])
+    # pass 携带非空问题 = 结论自相矛盾：不允许"默默保留 pass、丢弃问题"
+    if out["verdict"] == "pass" and (out.get("problems") or []):
+        raise ValueError(f"pass 携带非空 problems，结论矛盾: {str(raw)[:120]}")
     return out
 
 
