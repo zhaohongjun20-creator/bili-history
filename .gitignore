@@ -10,3 +10,4 @@ audio/
 .pytest_cache/
 lyricvideo/
 audio_intro/
+output/

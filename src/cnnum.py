@@ -60,8 +60,8 @@ _LA = r"(?![A-Za-z0-9])"
 _RULES = [
     # 百分比：80% → 百分之八十
     (re.compile(r"(\d+(?:\.\d+)?)\s*[%％]"), lambda m: "百分之" + _num_to_cn(m.group(1))),
-    # 年份（含区间后年）：1944年 / 1941-1945年 → 逐位读
-    (re.compile(_LB + r"(1[89]\d{2}|20\d{2})\s*-\s*((?:1[89]\d{2}|20\d{2}))\s*年"),
+    # 年份（含区间）：1944年 / 1941-1945年 / 1941—1945年 / 1941至1945年 → 逐位读
+    (re.compile(_LB + r"(1[89]\d{2}|20\d{2})\s*[-—–~～至]\s*((?:1[89]\d{2}|20\d{2}))\s*年"),
      lambda m: _digits_to_cn(m.group(1)) + "至" + _digits_to_cn(m.group(2)) + "年"),
     (re.compile(_LB + r"(1[89]\d{2}|20\d{2})\s*年"),
      lambda m: _digits_to_cn(m.group(1)) + "年"),
@@ -74,15 +74,16 @@ _RULES = [
     (re.compile(_LB + r"(\d+(?:\.\d+)?)(架|辆|艘|人|次|天|小时|分钟|秒|米|公里|"
                  r"毫米|厘米|吨|门|发|个|座|名|师|团|营|连|排|万|亿|倍|度|轮|波|批|处)"),
      lambda m: _num_to_cn(m.group(1)) + m.group(2)),
-    # 剩余独立数字（≤4位，非编号）：300 → 三百
-    (re.compile(_LB + r"(\d{1,4})(?:\.\d+)?" + _LA),
+    # 剩余独立数字（非编号，含小数）：300 → 三百；3.5 → 三点五；100000 → 十万
+    # （旁白里 ≥5 位数字几乎都是统计量，留着必被确定性审核拒稿，转为进位读法）
+    (re.compile(_LB + r"(\d{1,8}(?:\.\d+)?)" + _LA),
      lambda m: _num_to_cn(m.group(1))),
 ]
 
 
 def normalize(text: str) -> str:
     """把旁白文本里的数字全部转成汉字。"""
-    out = text
+    out = re.sub(r"(?<=\d),(?=\d)", "", text)   # 千分位逗号：3,000 → 3000
     for pat, fn in _RULES:
         out = pat.sub(fn, out)
     return out.replace("二千", "两千").replace("二万", "两万")

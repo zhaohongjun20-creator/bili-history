@@ -27,9 +27,11 @@ _COSY_PY = _COSY_ROOT / ".venv" / "Scripts" / "python.exe"
 _COSY_CLI = _COSY_ROOT / "synth_cli.py"
 
 
-def _synth_cosy_batch(sections: list, out_dir: str, cosy: dict) -> list[str]:
+def _synth_cosy_batch(sections: list, out_dir: str, cosy: dict,
+                      indices: list[int] | None = None) -> list[str]:
     """CosyVoice2 批量合成（子进程一次加载模型，全部段落出片后返回 wav 路径）。
 
+    indices：sections 对应的原段落号（断点续跑只补缺段时传，文件名按原段号落盘）。
     任一段失败即抛错，由调用方降级到旧链路。两种配方（cosy 配置里选）：
     - mode=zero_shot + spk:      预注册音色 ID（register_voice.py 注册）
     - mode=instruct2 + prompt_wav + instruct: 参考音频 + 风格指令（实测音质最优，
@@ -43,9 +45,10 @@ def _synth_cosy_batch(sections: list, out_dir: str, cosy: dict) -> list[str]:
                 "instruct": cosy["instruct"]}
     else:
         base = {"spk_id": cosy["spk"]}
+    idxs = indices if indices is not None else list(range(len(sections)))
     jobs = [{**base, "text": _cn(s["text"]),
              "out": str((Path(out_dir) / f"sec_{i:02d}.wav").resolve())}
-            for i, s in enumerate(sections)]  # 必须绝对路径：子进程 cwd 在 cosyvoice 目录
+            for i, s in zip(idxs, sections)]  # 必须绝对路径：子进程 cwd 在 cosyvoice 目录
     manifest = _COSY_ROOT / "_jobs.json"
     manifest.write_text(json.dumps({"jobs": jobs}, ensure_ascii=False),
                         encoding="utf-8")

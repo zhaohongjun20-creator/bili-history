@@ -1,0 +1,39 @@
+# 军史号 CI：Windows 环境安装依赖并跑全部测试（不依赖真实 API Key / 登录态）
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: 运行测试
+        env:
+          ZHIPU_API_KEY: ""        # 测试不得依赖真实密钥
+        run: python -m pytest tests/ -q --tb=short
+
+      - name: 保留测试日志
+        if: always()
+        run: python -m pytest tests/ -q --tb=long > pytest_report.txt 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pytest-report
+          path: pytest_report.txt

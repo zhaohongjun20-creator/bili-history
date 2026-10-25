@@ -79,6 +79,17 @@ bilibili:
   mid: 1518025639   # 数据回读用
   tid: 239              # 知识·人文历史（原 203 军事分区已被B站下线）
   tags_extra: ["军事历史", "二战", "纪录片", "历史科普"]
+  # account_file: "../bili-autopost-sau/data/biliup-account.json"
+  # ↑ 登录态路径（相对本仓库根）；不填依次回退环境变量 BILIUP_ACCOUNT_FILE、默认共享路径
+
+review_model: "glm-4-flash"   # 无记忆审查官模型（渲染前审查 + 人工核实分级）
+
+# 成片自动质检阈值（src/qc.py；发布前最后一道闸）
+qc:
+  max_black_seconds: 2.0     # 累计黑帧上限
+  max_volume_db: -0.5        # 峰值高于此视为削波
+  min_mean_volume_db: -45.0  # 平均低于此视为近乎静音
+  av_duration_slack: 2.0     # 音视频时长允许偏差（秒）
 
 copywriter:
   model: "glm-4-flash"

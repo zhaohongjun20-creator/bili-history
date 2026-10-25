@@ -1,0 +1,11 @@
+# bili-history 依赖（Python 3.12+，本机 3.14 验证）
+# 安装: pip install -r requirements.txt
+pyyaml>=6.0
+python-dotenv>=1.0
+requests>=2.31
+edge-tts>=7.0
+imageio-ffmpeg>=0.5    # 自带 ffmpeg 二进制，无需系统安装
+
+# 可选：
+# piper-tts>=1.8       # 本地神经音色兜底（模型放 ../tts_models）
+# playwright>=1.40     # 抖音分发与B站数据回读（src/stats.py）
