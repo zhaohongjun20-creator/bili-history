@@ -150,6 +150,25 @@ def run(dry_run: bool, topic_index: int | None):
     from src.sticker import resolve_stickers
     from concurrent.futures import ThreadPoolExecutor
 
+    # ④.5 审查闸门（无记忆审查官）：渲染前拦下史实硬伤/配图跑偏/标题问题
+    from src.review import review as review_video
+    _img_titles = [pool_imgs[i % len(pool_imgs)]["title"].replace("File:", "")[:60]
+                   for i in range(len(secs))]
+    try:
+        verdict = review_video(os.environ["ZHIPU_API_KEY"], doc["title"],
+                               secs[0]["text"][:120], secs, _img_titles)
+        for p in verdict["problems"]:
+            log.warning("🔍 审查: %s", p)
+        if verdict["verdict"] == "reject":
+            store.mark_topic(topic, doc["title"], "review-rejected")
+            log.error("🔍 审查官否决，本期不发布（宁缺毋滥）")
+            return
+        if verdict.get("title_fix"):
+            log.info("🔍 审查官改题: %s → %s", doc["title"], verdict["title_fix"])
+            doc["title"] = verdict["title_fix"]
+    except Exception as e:
+        log.warning("🔍 审查通道异常（放行）: %s", e)
+
     # 阶段一（快）：集中下载配图、准备贴纸与运镜参数
     render_jobs = []
     for i, (sec, v) in enumerate(zip(secs, voices)):
