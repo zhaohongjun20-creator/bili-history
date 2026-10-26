@@ -263,7 +263,6 @@ def test_mark_uploaded_registers_bv_and_prevents_reupload(env, monkeypatch):
     assert store.get_topic("集成测试主题")["status"] == "published"
 
 
-@pytest.mark.skip(reason="0.7.4 待修：风控重投路径断言未过，明天接着查")
 def test_rate_limited_is_confirmed_failure_auto_retry(env, monkeypatch):
     """21566 风控 = 平台明确拒绝（结果已核实）→ 重跑允许自动重投。
     与 uncertain（结果未核实必须人工）形成语义对照。"""
@@ -272,7 +271,7 @@ def test_rate_limited_is_confirmed_failure_auto_retry(env, monkeypatch):
     calls = []
 
     def rl_upload(*a, **kw):
-        calls.append(1)
+        calls.append(len(calls) + 1)          # 记录第几次调用
         if len(calls) == 1:
             raise autopost.sau_bridge.RateLimited("B站风控限流(code=21566)", 21566)
         return "BV1retry0001"
@@ -290,7 +289,6 @@ def test_rate_limited_is_confirmed_failure_auto_retry(env, monkeypatch):
     assert m["publish"]["bvid"] == "BV1retry0001"
 
 
-@pytest.mark.skip(reason="0.7.4 待修：登录失效重试路径断言未过，明天接着查")
 def test_login_failure_definitive_failed_retryable(env, monkeypatch):
     """登录失效 = 明确失败入库；重跑仍失败则保持 failed，绝不静默成功。"""
     log = __import__("logging").getLogger("mainB")
@@ -298,7 +296,7 @@ def test_login_failure_definitive_failed_retryable(env, monkeypatch):
     calls = []
 
     def auth_fail(*a, **kw):
-        calls.append(1)
+        calls.append(len(calls) + 1)          # 记录第几次调用
         raise autopost.sau_bridge.UploadError("B站登录态失效——重新扫码登录后重试",
                                               code=-101)
 
