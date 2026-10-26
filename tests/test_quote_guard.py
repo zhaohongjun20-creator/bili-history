@@ -40,3 +40,17 @@ def test_review_deterministic_passes_clean_sections():
     secs = [{"text": "丘吉尔说：“我们将在海滩作战。”三十万人得以撤离。"}]
     issues = _deterministic("为什么这场战役只用了7天", secs)
     assert not any("署名引语" in p for p in issues)
+
+
+def test_strip_allows_adverbial_modifier():
+    """名字与动词之间的状语（"坚定地"）不吞进名字——白名单作者不误伤。"""
+    text = "在混乱的撤退中，丘吉尔坚定地说：“我们失去了装备。”随后部队渡海。"
+    out, stripped = _strip_fabricated_quotes(text, set(QUOTE_AUTHOR_WHITELIST))
+    assert stripped == [] and "丘吉尔坚定地说" in out
+
+
+def test_strip_still_catches_adverbial_fabrication():
+    """状语修饰的编造署名仍要抓：拿破仑沉痛地说道 → 剥除。"""
+    text = "拿破仑沉痛地说道：“装备失去了。”部队撤退。"
+    out, stripped = _strip_fabricated_quotes(text, set(QUOTE_AUTHOR_WHITELIST))
+    assert "拿破仑" not in out and len(stripped) == 1

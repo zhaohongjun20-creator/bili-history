@@ -125,11 +125,19 @@ def _expand(api_key: str, point: str, model: str, temperature: str,
 # 名言白名单：只允许当事人著作/演说（与 OUTLINE_PROMPT quote 规则一致）
 QUOTE_AUTHOR_WHITELIST = ("丘吉尔", "克劳塞维茨", "朱可夫", "曼施坦因",
                           "艾森豪威尔", "戴高乐")
-# 署名引语模式："正如拿破仑曾说""他所言：""丘吉尔说："等——白名单外一律视为编造
-# 名字用惰性匹配（防"亚历山大曾"把"曾"吞进名字），允许"说"后带"的"
+# 署名引语模式："正如拿破仑曾说""他沉痛地说道：""丘吉尔坚定地说："等——白名单外视为编造
+# 捕获"名字+修饰语"整个前缀（含曾/军衔/状语），由 Python 在其中解析白名单作者
 _ATTRIBUTION_RE = re.compile(
-    r"[像如]?([\u4e00-\u9fa5A-Za-z·]{2,6}?)(?:曾经?|上将|将军|元帅|首相)?"
-    r"(?:所?说的?|所言|讲过|说过)[，,：:）”]")
+    r"[像如]?([\u4e00-\u9fa5A-Za-z·]{2,10}?)"
+    r"(?:所?说的?|说道|所言|讲过|说过)[，,：:）”]")
+
+
+def _resolve_speaker(span: str, allowed: set) -> str | None:
+    """从"名字+修饰"前缀里解析白名单作者；不含任何允许作者 → None（编造）。"""
+    for a in allowed:
+        if a and a in span:
+            return a
+    return None
 
 
 def _strip_fabricated_quotes(text: str, allowed: set) -> tuple[str, list]:
@@ -142,7 +150,7 @@ def _strip_fabricated_quotes(text: str, allowed: set) -> tuple[str, list]:
     out_sents, stripped = [], []
     for sent in re.split(r"(?<=[。！？])", text):
         m = _ATTRIBUTION_RE.search(sent)
-        if m and m.group(1) not in allowed:
+        if m and _resolve_speaker(m.group(1), allowed) is None:
             stripped.append(sent.strip())
             continue
         out_sents.append(sent)

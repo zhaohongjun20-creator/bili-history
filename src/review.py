@@ -65,13 +65,14 @@ def _deterministic(title: str, secs: list) -> list:
         if re.search(r"(?<![A-Za-z0-9.\-])\d", cn_normalize(s["text"])):
             issues.append(f"第{i}段规范化后仍残留独立数字（TTS会乱读）")
             break
-    # 名言出处确定性兜底：正文署名引语的作者必须在白名单或本段 quote 字段里
+    # 名言出处确定性兜底：正文署名引语的前缀里必须能解析出白名单作者
     # （glm-4-flash 扩写会在正文编造"正如拿破仑所说"，写稿层剥除，此处兜底拒收）
+    from .script import _resolve_speaker
     for i, s in enumerate(secs):
         allowed = set(QUOTE_AUTHOR_WHITELIST) | {
             (s.get("quote") or {}).get("author") or ""}
         m = _ATTRIBUTION_RE.search(s["text"])
-        if m and m.group(1) not in allowed:
+        if m and _resolve_speaker(m.group(1), allowed) is None:
             issues.append(f"第{i}段旁白含白名单外署名引语: {m.group(1)}（编造名言风险）")
             break
     return issues
