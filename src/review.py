@@ -112,9 +112,18 @@ def _ask_reviewer(api_key: str, title: str, desc: str, secs: list,
     out = json.loads(m.group(1) if m.groups() else m.group(0)) if m else None
     if not isinstance(out, dict) or out.get("verdict") not in ("pass", "fix", "reject"):
         raise ValueError(f"审查返回无法解析: {str(raw)[:120]}")
-    _validate_problems(out.get("problems") or [])
+    # problems 必填且必须是列表——不用 `or []` 兜底（假值 ""/null/0/false/{} 会被
+    # 洗成空列表当"无问题"放行，fail-open 漏洞）
+    if "problems" not in out:
+        raise ValueError(f"审查返回缺 problems 字段: {str(raw)[:120]}")
+    _validate_problems(out["problems"])
+    # 顶层字段类型/枚举：不合规响应不得被部分采纳
+    if "severity" in out and out["severity"] not in _VALID_SEVERITIES:
+        raise ValueError(f"severity 非法: {out['severity']!r}")
+    if "title_fix" in out and not isinstance(out["title_fix"], str):
+        raise ValueError(f"title_fix 非字符串: {out['title_fix']!r}")
     # pass 携带非空问题 = 结论自相矛盾：不允许"默默保留 pass、丢弃问题"
-    if out["verdict"] == "pass" and (out.get("problems") or []):
+    if out["verdict"] == "pass" and out["problems"]:
         raise ValueError(f"pass 携带非空 problems，结论矛盾: {str(raw)[:120]}")
     return out
 
@@ -147,7 +156,7 @@ def review(api_key: str, title: str, desc: str, secs: list,
         raise ReviewUnavailable(f"审查服务不可用（重试{retries}次）: {last_err}")
 
     details, flat = [], []
-    for p in out.get("problems") or []:
+    for p in out["problems"]:                 # _ask_reviewer 已保证为合法列表
         if isinstance(p, dict):
             details.append(p)
             flat.append(f"第{p.get('section', '?')}段"

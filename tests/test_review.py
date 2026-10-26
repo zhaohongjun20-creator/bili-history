@@ -74,6 +74,75 @@ def test_invalid_problem_elements_rejected(monkeypatch):
                           [{"text": "无数字旁白" * 10}], [], retries=0)
 
 
+def test_falsy_problems_values_rejected(monkeypatch):
+    """problems 假值不得被 `or []` 洗成空列表放行（0.7.4 补充整改 P1）。
+    必填字段缺失/假值/非列表 → 一律重试后 ReviewUnavailable。"""
+    bad_bodies = [
+        '{"verdict": "pass", "problems": ""}',
+        '{"verdict": "pass", "problems": null}',
+        '{"verdict": "pass", "problems": 0}',
+        '{"verdict": "pass", "problems": false}',
+        '{"verdict": "pass", "problems": {}}',
+        '{"verdict": "pass", "problems": "没有发现问题"}',
+        '{"verdict": "pass", "problems": -1}',
+        '{"verdict": "pass"}',                       # 必填字段缺失
+    ]
+    for bad in bad_bodies:
+        monkeypatch.setattr(review.requests, "post", _fake_post(bad))
+        with pytest.raises(review.ReviewUnavailable):
+            review.review("k", "为什么这场战役只用了7天", "d",
+                          [{"text": "无数字旁白" * 10}], [], retries=0)
+
+
+def test_falsy_problems_rejected_after_retry(monkeypatch):
+    """假值 problems 触发重试（不是首轮直接抛错），耗尽后 ReviewUnavailable。"""
+    calls = []
+    monkeypatch.setattr(review.requests, "post",
+                        _fake_post('{"verdict": "pass", "problems": null}',
+                                   calls=calls))
+    with pytest.raises(review.ReviewUnavailable):
+        review.review("k", "为什么这场战役只用了7天", "d",
+                      [{"text": "无数字旁白" * 10}], [], retries=2)
+    assert len(calls) == 3
+
+
+def test_valid_empty_problems_list_accepted(monkeypatch):
+    """problems 为正常空列表是合法响应（真·无问题）。"""
+    monkeypatch.setattr(review.requests, "post",
+                        _fake_post('{"verdict": "pass", "problems": [], "title_fix": ""}'))
+    out = review.review("k", "为什么这场战役只用了7天", "d",
+                        [{"text": "无数字旁白" * 10}], [])
+    assert out["verdict"] == "pass" and out["problems"] == []
+
+
+def test_top_level_severity_enum_enforced(monkeypatch):
+    """顶层 severity 不在三值枚举 → 整体无效，不得部分采纳。"""
+    monkeypatch.setattr(review.requests, "post",
+                        _fake_post('{"verdict": "pass", "problems": [], "severity": "critical"}'))
+    with pytest.raises(review.ReviewUnavailable):
+        review.review("k", "为什么这场战役只用了7天", "d",
+                      [{"text": "无数字旁白" * 10}], [], retries=0)
+
+
+def test_top_level_title_fix_type_enforced(monkeypatch):
+    """顶层 title_fix 非字符串 → 整体无效。"""
+    monkeypatch.setattr(review.requests, "post",
+                        _fake_post('{"verdict": "fix", "problems": [], "title_fix": 123}'))
+    with pytest.raises(review.ReviewUnavailable):
+        review.review("k", "为什么这场战役只用了7天", "d",
+                      [{"text": "无数字旁白" * 10}], [], retries=0)
+
+
+def test_valid_severity_and_fix_title_accepted(monkeypatch):
+    """合法 severity + 可采纳的 fix 标题正常通过。"""
+    body = ('{"verdict": "fix", "severity": "high", "problems": [],'
+            ' "title_fix": "凭什么7天就输了这场仗"}')
+    monkeypatch.setattr(review.requests, "post", _fake_post(body))
+    out = review.review("k", "为什么这场战役只用了7天", "d",
+                        [{"text": "无数字旁白" * 10}], [])
+    assert out["verdict"] == "fix" and out["title_fix"].startswith("凭什么")
+
+
 def test_pass_with_nonempty_problems_is_contradiction(monkeypatch):
     """pass 携带非空 problems = 结论矛盾：不得默默保留 pass 丢弃问题。"""
     body = ('{"verdict": "pass", "problems": [{"issue": "第2段配图存疑",'

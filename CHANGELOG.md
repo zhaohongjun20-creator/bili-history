@@ -19,6 +19,12 @@
   → 整体无效 → 重试后 ReviewUnavailable（fail-closed，不静默过滤）；
   **pass 携带非空 problems 视为结论自相矛盾**，同样拒收（第四轮审查 P1）。
 
+### 安全修复（补充整改）
+- **审查 schema 假值绕过**：`problems` 校验输入曾用 `out.get("problems") or []`，
+  假值（`""`/`null`/`0`/`false`/`{}`）被洗成空列表当"无问题"放行（fail-open）。
+  现 problems 必填且必须严格为 list；顶层 `severity`（三值枚举）与 `title_fix`
+  （字符串）同步校验，不合规响应不得部分采纳。
+
 ### 测试（81 → 89 通过 + 2 跳过）
 - 锁 10 项重写：真·多进程并发单赢家（8 个独立解释器）、持有者被杀后内核立即释放、
   挂死阻塞生产且 sidecar 可供 taskkill、残留/损坏内容不妨碍获取、幂等释放。
