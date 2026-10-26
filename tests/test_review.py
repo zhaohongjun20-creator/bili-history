@@ -133,6 +133,69 @@ def test_top_level_title_fix_type_enforced(monkeypatch):
                       [{"text": "无数字旁白" * 10}], [], retries=0)
 
 
+def test_hallucinated_quote_problem_dropped(monkeypatch):
+    """审查官虚构"拿破仑的名言"（原文只有丘吉尔引用）→ 该问题被确定性过滤，
+    无剩余真实问题时 verdict 降级为 pass——审查幻觉不得永久阻塞生产。"""
+    body = ('{"verdict": "fix", "severity": "medium", "problems": ['
+            '{"issue": "年代穿越，拿破仑的名言与敦刻尔克战役无关", "section": -1,'
+            ' "severity": "medium", "suggest": "删除"}], "title_fix": ""}')
+    monkeypatch.setattr(review.requests, "post", _fake_post(body))
+    secs = [{"text": "丘吉尔说：我们将在海滩作战。三十万大军撤离了敦刻尔克。"}]
+    out = review.review("k", "为什么这场战役只用了7天", "d", secs, [])
+    assert out["verdict"] == "pass"
+    assert out["problems"] == []
+    assert any("拿破仑" in d for d in out["hallucinated_dropped"])
+
+
+def test_real_quote_problem_kept(monkeypatch):
+    """问题点名的作者真实出现在原文 → 保留，不误杀真问题。"""
+    body = ('{"verdict": "fix", "severity": "medium", "problems": ['
+            '{"issue": "丘吉尔的名言引用语境不当", "section": 1,'
+            ' "severity": "medium", "suggest": "调整"}], "title_fix": ""}')
+    monkeypatch.setattr(review.requests, "post", _fake_post(body))
+    secs = [{"text": "丘吉尔说：我们将在海滩作战。"}]
+    out = review.review("k", "为什么这场战役只用了7天", "d", secs, [])
+    assert out["verdict"] == "fix"
+    assert len(out["problems"]) == 1
+
+
+def test_non_quote_problems_never_filtered(monkeypatch):
+    """非名言类问题（配图匹配等）不受幻觉过滤影响，一律保留。"""
+    body = ('{"verdict": "fix", "severity": "medium", "problems": ['
+            '{"issue": "配图与内容无关", "section": 1, "severity": "medium",'
+            ' "suggest": "换图"}], "title_fix": ""}')
+    monkeypatch.setattr(review.requests, "post", _fake_post(body))
+    secs = [{"text": "完全无关的旁白内容，没有名言。"}]
+    out = review.review("k", "为什么这场战役只用了7天", "d", secs, [])
+    assert out["verdict"] == "fix"          # 无 title_fix → 仍走人工闸门
+    assert len(out["problems"]) == 1
+
+
+def test_mixed_fabricated_and_real_problems(monkeypatch):
+    """虚构+真实问题混合：虚构的丢弃，真实的保留，verdict 维持 fix。"""
+    body = ('{"verdict": "fix", "severity": "medium", "problems": ['
+            '{"issue": "拿破仑的名言与战役无关", "section": -1, "severity": "medium", "suggest": ""},'
+            '{"issue": "配图偏现代", "section": 2, "severity": "medium", "suggest": "核对"}],'
+            ' "title_fix": ""}')
+    monkeypatch.setattr(review.requests, "post", _fake_post(body))
+    secs = [{"text": "旁白甲。"}, {"text": "旁白乙提到配图相关。"}, {"text": "旁白丙。"}]
+    out = review.review("k", "为什么这场战役只用了7天", "d", secs, [])
+    assert out["verdict"] == "fix"
+    assert len(out["problems"]) == 1 and "配图偏现代" in out["problems"][0]
+    assert len(out["hallucinated_dropped"]) == 1
+
+
+def test_reject_never_downgraded_by_filter(monkeypatch):
+    """reject 结论不因问题被过滤而降级——否决是审查官的明确意志。"""
+    body = ('{"verdict": "reject", "severity": "high", "problems": ['
+            '{"issue": "拿破仑的名言属于年代穿越", "section": -1, "severity": "high",'
+            ' "suggest": "删除"}], "title_fix": ""}')
+    monkeypatch.setattr(review.requests, "post", _fake_post(body))
+    secs = [{"text": "没有名言的旁白。"}]
+    out = review.review("k", "为什么这场战役只用了7天", "d", secs, [])
+    assert out["verdict"] == "reject"
+
+
 def test_valid_severity_and_fix_title_accepted(monkeypatch):
     """合法 severity + 可采纳的 fix 标题正常通过。"""
     body = ('{"verdict": "fix", "severity": "high", "problems": [],'

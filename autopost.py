@@ -50,7 +50,10 @@ JOBS_DIR = Path(DATA_DIR) / "jobs"
 
 # 缓存键版本号：提示词/流程实质变更时 +1，让旧缓存自然失效
 # v2: 段落渲染去掉 -shortest（画面停留修复）+ 混音 0.85 余量 + SRT 时间轴修正
-V_SCRIPT, V_REVIEW, V_TTS, V_IMG, V_CLIP, V_COMPOSE = "v1", "v1", "v1", "v1", "v2", "v2"
+# V_SCRIPT v2: quote 白名单收紧（三稿连续塞无关名人名言被审查拦截）
+# V_REVIEW v2: 审查官幻觉过滤（虚构"拿破仑名言"问题）+ 严格 schema
+# V_SCRIPT v3: 扩写禁编造名言 + 写稿层剥除白名单外署名引语（四稿连续名言翻车根因）
+V_SCRIPT, V_REVIEW, V_TTS, V_IMG, V_CLIP, V_COMPOSE = "v3", "v2", "v1", "v1", "v2", "v2"
 
 
 class StageError(RuntimeError):

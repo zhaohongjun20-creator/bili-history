@@ -29,12 +29,20 @@ OUTLINE_PROMPT = """你是B站军事历史区编导，策划一期战争史科�
 
 stickers 规则：**自行判断**哪些段落值得加表情贴纸——只在情绪高点/反差/玩梗处加（全篇0-4处，可以没有），at=贴纸出现时机（段内相对时间0-1），选与该句情绪匹配的 emoji。
 
-quote 规则：**自行判断**哪些段落适合引用文章/回忆录/名人名言（全篇1-3处）——优先克劳塞维茨《战争论》、丘吉尔演讲/回忆录、朱可夫回忆录、曼施坦因《失去的胜利》、戴高乐、艾森豪威尔等当事人的著作或演说。**硬性要求：只用真实存在且广为流传的名言，给出处；拿不准的一律不用**（宁缺毋滥，编造名言是纪录片大忌）。该段旁白应自然织入这句名言（引用后紧跟一句编导视角的回应或解读）。"""
+quote 规则（**已连续多稿因名言翻车，从严执行**）：
+- 只允许引用以下**当事人著作/演说**的原文：克劳塞维茨《战争论》、丘吉尔（战时演说或回忆录）、
+  朱可夫《回忆与思考》、曼施坦因《失去的胜利》、艾森豪威尔《远征欧陆》、戴高乐《战争回忆录》。
+- **禁用**：拿破仑、邓小平、林则徐等与本题战役无直接关系的名人名言；"据说/相传"的话；
+  研究者总结的观点冒充当事人原话；拿不准出处的一律不引用。
+- 数量：全篇 **0-2 处**，宁缺毋滥——没有合适的话就不设 quote 字段，不要硬凑。
+  该段旁白应自然织入名言（引用后紧跟一句编导视角的回应或解读）。"""
 
 EXPAND_PROMPT = """把以下史实要点扩写成纪录片旁白段落，要求：
 - 中文 {c_lo}-{c_hi} 字（硬性要求，不足或超出都算失败）
 - 口语化叙述，有细节有节奏，克制不煽情
-- 若要点包含名言引用：将名言原文自然织入旁白（用引号），引用后接一句你的解读
+- **严禁自行引入任何名人名言/人物语录**（如"正如拿破仑所说""XX曾言"）——
+  除非要点中包含名言，且只能原样织入要点给的那一句，绝不添加其他人的话。
+  编造名言是纪录片大忌，审查官会因此整稿否决。
 - 只输出旁白正文，不要任何前缀、标题、引号包裹全文
 
 要点：{point}"""
@@ -114,6 +122,33 @@ def _expand(api_key: str, point: str, model: str, temperature: str,
     return text
 
 
+# 名言白名单：只允许当事人著作/演说（与 OUTLINE_PROMPT quote 规则一致）
+QUOTE_AUTHOR_WHITELIST = ("丘吉尔", "克劳塞维茨", "朱可夫", "曼施坦因",
+                          "艾森豪威尔", "戴高乐")
+# 署名引语模式："正如拿破仑曾说""他所言：""丘吉尔说："等——白名单外一律视为编造
+# 名字用惰性匹配（防"亚历山大曾"把"曾"吞进名字），允许"说"后带"的"
+_ATTRIBUTION_RE = re.compile(
+    r"[像如]?([\u4e00-\u9fa5A-Za-z·]{2,6}?)(?:曾经?|上将|将军|元帅|首相)?"
+    r"(?:所?说的?|所言|讲过|说过)[，,：:）”]")
+
+
+def _strip_fabricated_quotes(text: str, allowed: set) -> tuple[str, list]:
+    """剥除旁白正文里白名单外的署名引语（含所在整句），返回 (清理后文本, 被剥句子)。
+
+    glm-4-flash 的逐段扩写会在正文里自行编造"正如拿破仑所说…"式名言
+    （quote 白名单只管 quote 字段，管不到正文），这是连续数稿被审查否决的
+    根因。含编造署名的整句删除——名言是装饰，不值得为它丢整稿。
+    """
+    out_sents, stripped = [], []
+    for sent in re.split(r"(?<=[。！？])", text):
+        m = _ATTRIBUTION_RE.search(sent)
+        if m and m.group(1) not in allowed:
+            stripped.append(sent.strip())
+            continue
+        out_sents.append(sent)
+    return "".join(out_sents), stripped
+
+
 def generate(api_key: str, topic: str, model: str = "glm-4-flash",
              temperature: float = 0.7, n_min: int = 8, n_max: int = 11,
              c_lo: int = 70, c_hi: int = 110) -> dict:
@@ -129,6 +164,12 @@ def generate(api_key: str, topic: str, model: str = "glm-4-flash",
     sections = []
     for sec in outline["sections"]:
         text = _expand(api_key, sec["point"], model, temperature, c_lo, c_hi)
+        allowed = set(QUOTE_AUTHOR_WHITELIST)
+        if sec.get("quote", {}).get("author"):
+            allowed.add(sec["quote"]["author"])
+        text, stripped = _strip_fabricated_quotes(text, allowed)
+        if stripped:
+            print(f"[script] 剥除编造署名引语: {stripped}")
         sections.append({"text": text,
                          "image_query": sec.get("image_query") or topic,
                          "stickers": sec.get("stickers") or [],

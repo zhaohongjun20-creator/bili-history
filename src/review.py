@@ -13,7 +13,8 @@
 """
 import json, re, time, requests
 
-from .script import _has_hook, _LABEL_RE, ZHIPU_URL
+from .script import (_has_hook, _LABEL_RE, _ATTRIBUTION_RE,
+                     QUOTE_AUTHOR_WHITELIST, ZHIPU_URL)
 from .cnnum import normalize as cn_normalize
 
 REVIEW_PROMPT = """你是B站军事历史频道的独立内容审查官，审查一期即将发布的视频。
@@ -40,7 +41,11 @@ REVIEW_PROMPT = """你是B站军事历史频道的独立内容审查官，审查
   "title_fix": "仅当标题有问题时给出修正标题（30字内，带钩子，否则空字符串）"}}
 判定标准：史实硬伤≥2处或配图大面积跑偏 → reject；小问题 → fix；没问题 → pass。
 AI 审查通过不代表史实绝对正确：凡涉及具体伤亡数字、争议性结论，请在 problems
-里给出 severity=medium 并注明需人工核实，由产线转人工审核。"""
+里给出 severity=medium 并注明需人工核实，由产线转人工审核。
+
+**真实性硬性要求**：只报告【分段内容】里真实存在的问题；引用/名言类问题的
+作者名必须实际出现在分段原文中（拿原文里没有的人名虚构问题，整单按无效处理）；
+段落号只能取 1~总段数 或 -1（标题/整体）；拿不准的问题宁可不报，禁止编造凑数。"""
 
 
 class ReviewUnavailable(RuntimeError):
@@ -56,9 +61,18 @@ def _deterministic(title: str, secs: list) -> list:
     if not _has_hook(title):
         issues.append(f"标题无钩子: {title}")
     for i, s in enumerate(secs):
-        # cnnum 有意保留装备编号（B-17/T-34，字母邻接的数字），只查独立残留数字
+        # cnnum 有意保留装备编号（B-17/T-34，字母邻接数字），只查独立残留数字
         if re.search(r"(?<![A-Za-z0-9.\-])\d", cn_normalize(s["text"])):
             issues.append(f"第{i}段规范化后仍残留独立数字（TTS会乱读）")
+            break
+    # 名言出处确定性兜底：正文署名引语的作者必须在白名单或本段 quote 字段里
+    # （glm-4-flash 扩写会在正文编造"正如拿破仑所说"，写稿层剥除，此处兜底拒收）
+    for i, s in enumerate(secs):
+        allowed = set(QUOTE_AUTHOR_WHITELIST) | {
+            (s.get("quote") or {}).get("author") or ""}
+        m = _ATTRIBUTION_RE.search(s["text"])
+        if m and m.group(1) not in allowed:
+            issues.append(f"第{i}段旁白含白名单外署名引语: {m.group(1)}（编造名言风险）")
             break
     return issues
 
@@ -128,6 +142,33 @@ def _ask_reviewer(api_key: str, title: str, desc: str, secs: list,
     return out
 
 
+_QUOTE_NAME_RE = re.compile(r"([\u4e00-\u9fa5A-Za-z·]{2,8})的名言|名言.{0,6}([\u4e00-\u9fa5A-Za-z·]{2,8})")
+
+
+def _filter_hallucinated(flat: list, details: list, full_text: str
+                         ) -> tuple[list, list, list]:
+    """确定性幻觉过滤：名言类问题点名的作者不在原文 → 该问题为审查官虚构，丢弃。
+
+    审查模型会编造"XX的名言"类问题——实测第4稿原文唯一引用是丘吉尔 1940-06-04
+    原话，审查官却两次虚构"拿破仑的名言"。名言类问题可用确定性规则兜底：
+    点名的作者在 title+全部段落文本中不出现 → 该问题不可证实，丢弃。
+    非名言类问题不做文本匹配（配图匹配等无法用文本判定真伪，一律保留）。
+    返回 (保留的 flat, 保留的 details, 丢弃说明列表)。
+    """
+    kept_p, kept_d, dropped = [], [], []
+    for p, d in zip(flat, details + [None] * (len(flat) - len(details))):
+        m = _QUOTE_NAME_RE.search(p)
+        if m:
+            name = next((g for g in m.groups() if g), "")
+            if name and name not in full_text:
+                dropped.append(f"{p}〔原文无该作者引用，判为审查官虚构〕")
+                continue
+        kept_p.append(p)
+        if d is not None:
+            kept_d.append(d)
+    return kept_p, kept_d, dropped
+
+
 def review(api_key: str, title: str, desc: str, secs: list,
            image_titles: list, model: str = "glm-4-flash",
            retries: int = 2) -> dict:
@@ -137,6 +178,8 @@ def review(api_key: str, title: str, desc: str, secs: list,
     ReviewUnavailable（调用方应置 failed，等待重试，不放行）。
     确定性问题（标签词/残留数字/超长/无钩子）**一律 reject**——它们本应
     在生成层修正，流到审查层说明修正失败，不允许"记录问题后继续"。
+    名言类问题经幻觉过滤后若一条不剩，且结论非 reject → 降级为 pass
+    （虚构的问题不构成放行的障碍，但改题已应用则保留改题）。
     """
     problems = _deterministic(title, secs)
     if problems:
@@ -163,13 +206,20 @@ def review(api_key: str, title: str, desc: str, secs: list,
                         f"[{p.get('severity', '?')}] {p.get('issue', '')}")
         elif p:
             flat.append(str(p))
-    flat.extend(problems)                      # 确定性问题（如有）并入
 
-    out["problems"] = flat
-    out["details"] = details
-    out.setdefault("severity", "medium" if flat else "low")
+    # 幻觉过滤（fail-closed 的反面：审查官虚构的问题不得阻塞生产）
+    full_text = title + "".join(s["text"] for s in secs)
+    flat, details, dropped = _filter_hallucinated(flat, details, full_text)
+    if dropped and out["verdict"] in ("fix", "pass") and not flat:
+        out["verdict"] = "pass"               # 虚构问题清空后无真实问题
+    if dropped:
+        out.setdefault("hallucinated_dropped", []).extend(dropped)
+
     if out["verdict"] == "fix" and out.get("title_fix"):
         fix = str(out["title_fix"]).strip().strip('"「」')
         if _LABEL_RE.search(fix) or not _has_hook(fix):
             out["title_fix"] = ""  # 审查官自己给的标题不达标就不采纳
+    out["problems"] = flat
+    out["details"] = details
+    out.setdefault("severity", "medium" if flat else "low")
     return out
