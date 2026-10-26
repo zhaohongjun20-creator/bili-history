@@ -76,3 +76,35 @@ def test_publish_info(tmp_path):
     job.set_title("新标题")
     m = json.loads((job.dir / "manifest.json").read_text(encoding="utf-8"))
     assert m["publish"]["bvid"] == "BV1abc" and m["title"] == "新标题"
+
+
+def test_save_retries_transient_replace_lock(tmp_path, monkeypatch):
+    """Windows Defender 瞬时锁：os.replace 偶发 PermissionError → 退避重试成功。"""
+    import os
+    job = Job.create(tmp_path / "jobs", "瞬时锁")
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(src, dst, *a, **kw):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise PermissionError(5, "拒绝访问")
+        return real_replace(src, dst, *a, **kw)
+
+    monkeypatch.setattr("src.jobs.os.replace", flaky_replace)
+    job.mark_done("script", "k")
+    assert job.stage("script")["status"] == "done"
+    assert calls["n"] == 3                      # 前两次被锁，第三次成功
+    assert not (job.dir / "manifest.json.tmp").exists()
+
+
+def test_save_fallback_after_persistent_lock(tmp_path, monkeypatch):
+    """持续锁：重试耗尽 → 直接覆盖兜底，任务数据不丢、不抛错。"""
+    import os
+    job = Job.create(tmp_path / "jobs", "持续锁")
+    monkeypatch.setattr(
+        "src.jobs.os.replace",
+        lambda *a, **kw: (_ for _ in ()).throw(PermissionError(5, "拒绝访问")))
+    job.mark_done("script", "kk")
+    m = json.loads((job.dir / "manifest.json").read_text(encoding="utf-8"))
+    assert m["stages"]["script"]["status"] == "done"

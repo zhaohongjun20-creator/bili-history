@@ -95,7 +95,23 @@ class Job:
         tmp = self.manifest_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(self.manifest, ensure_ascii=False, indent=1),
                        encoding="utf-8")
-        tmp.replace(self.manifest_path)                    # 同盘原子替换
+        # Windows：os.replace 对刚写完的文件偶发 WinError 5（Defender 瞬时扫描锁定），
+        # 退避重试；仍失败则退化为直接覆盖（保持任务可续跑，牺牲一次原子性）
+        for wait in (0, 0.2, 0.5, 1.0, 2.0):
+            if wait:
+                time.sleep(wait)
+            try:
+                tmp.replace(self.manifest_path)
+                return
+            except PermissionError:
+                continue
+        try:
+            self.manifest_path.write_text(
+                json.dumps(self.manifest, ensure_ascii=False, indent=1),
+                encoding="utf-8")
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass                                 # tmp 保留：下次 save 覆盖
 
     @property
     def job_id(self) -> str:
