@@ -152,11 +152,16 @@ def compose_final(section_files: list, bgm_path: str, srt_path: str,
     # BGM ducking：旁白作 sidechain 触发源，说话时 BGM 自动压低（广播级配比），
     # 比固定音量 amix 层次感好得多——bgm_volume 变为"无人声时的铺底基线"
     style = subtitle_style or SUBTITLE_STYLE
+    # subtitles 滤镜不接受盘符冒号（C: 被当参数分隔符；\: 转义与引号包裹
+    # 在本 ffmpeg 版本均实测无效）——含盘符时转相对 cwd 路径（产线实证可用形式）
+    srt_arg = Path(srt_path).as_posix()
+    if ":" in srt_arg:
+        srt_arg = Path(srt_path).resolve().relative_to(Path.cwd()).as_posix()
     fc_c = (f"[1:a]asplit=2[voice][key];"
             f"[2:a]volume={bgm_volume}[bg];"
             f"[bg][key]sidechaincompress=threshold=0.02:ratio=6:attack=150:release=900[bgd];"
             f"[voice][bgd]amix=inputs=2:duration=first:normalize=0,volume=0.85[aout];"
-            f"[0:v]subtitles={Path(srt_path).as_posix()}"
+            f"[0:v]subtitles={srt_arg}"
             f":force_style='{style}'[vout]")
     cmd_c = [ffmpeg, "-y", "-i", v_only, "-i", a_only,
              "-stream_loop", "-1", "-i", bgm_path,
