@@ -27,6 +27,36 @@ _COSY_PY = _COSY_ROOT / ".venv" / "Scripts" / "python.exe"
 _COSY_CLI = _COSY_ROOT / "synth_cli.py"
 
 
+# CosyVoice2 预设缺省值（instruct2：参考音频 + 风格指令）
+DEFAULT_COSY_PRESET = {
+    "mode": "instruct2",
+    "prompt_wav": "repo/asset/cross_lingual_prompt.wav",
+    "instruct": "用低沉严肃的中文纪录片男声旁白解说",
+}
+
+
+def resolve_cosy_preset(cosy: dict) -> dict:
+    """解析配音预设：narrator.cosy.preset 指名 presets 里的条目；
+    未指名/条目缺失时回退旧字段（mode/prompt_wav/instruct），再回退内置缺省。
+    返回的 dict 含 mode 与该 mode 所需参数（prompt_wav+instruct 或 spk_id）。
+    """
+    presets = cosy.get("presets") or {}
+    name = cosy.get("preset")
+    p = presets.get(name) if name else None
+    if not p:
+        p = {k: cosy[k] for k in ("mode", "prompt_wav", "instruct") if k in cosy}
+    resolved = dict(DEFAULT_COSY_PRESET)
+    resolved.update({k: v for k, v in p.items() if v})
+    if resolved.get("mode") == "zero_shot" and resolved.get("spk_id"):
+        resolved = {"mode": "zero_shot", "spk_id": resolved["spk_id"]}
+    if resolved.get("mode") == "instruct2":
+        if not resolved.get("prompt_wav"):
+            raise ValueError("instruct2 预设缺 prompt_wav")
+        if not resolved.get("instruct"):
+            resolved["instruct"] = DEFAULT_COSY_PRESET["instruct"]
+    return resolved
+
+
 def _synth_cosy_batch(sections: list, out_dir: str, cosy: dict,
                       indices: list[int] | None = None) -> list[str]:
     """CosyVoice2 批量合成（子进程一次加载模型，全部段落出片后返回 wav 路径）。
@@ -40,11 +70,13 @@ def _synth_cosy_batch(sections: list, out_dir: str, cosy: dict,
     if not (_COSY_PY.exists() and _COSY_CLI.exists()):
         raise RuntimeError(f"cosyvoice env missing: {_COSY_PY}")
     from .cnnum import normalize as _cn  # 数字→汉字：旁路 cosy TN（"1944年"会被读成"十九四四年"）
-    if cosy.get("mode", "zero_shot") == "instruct2":
-        base = {"mode": "instruct2", "prompt_wav": str(_COSY_ROOT / cosy["prompt_wav"]),
-                "instruct": cosy["instruct"]}
+    base = resolve_cosy_preset(cosy)
+    if base["mode"] == "instruct2":
+        base = {"mode": "instruct2",
+                "prompt_wav": str(_COSY_ROOT / base["prompt_wav"]),
+                "instruct": base["instruct"]}
     else:
-        base = {"spk_id": cosy["spk"]}
+        base = {"spk_id": base["spk_id"]}
     idxs = indices if indices is not None else list(range(len(sections)))
     jobs = [{**base, "text": _cn(s["text"]),
              "out": str((Path(out_dir) / f"sec_{i:02d}.wav").resolve())}

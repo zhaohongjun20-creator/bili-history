@@ -296,12 +296,11 @@ def stage_review(job, topic, doc, pool_imgs, cfg, log) -> dict:
 
 
 def _voice_key(sec_text: str, narr: dict, voice: str, zhipu_cfg) -> str:
+    cosy = narrator.resolve_cosy_preset(narr.get("cosy") or {})         if (narr.get("cosy") or {}).get("enable") else None
     return jobs_mod.cache_key(
         v=V_TTS, text=sec_text, voice=voice, rate=narr["rate"],
         backend=narr.get("backend", "edge"),
-        cosy={k: narr.get("cosy", {}).get(k)
-              for k in ("enable", "mode", "prompt_wav", "instruct")}
-        if narr.get("cosy") else None,
+        cosy=cosy,
         zhipu_model=(zhipu_cfg or {}).get("model"))
 
 

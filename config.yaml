@@ -59,9 +59,24 @@ narrator:
   rate: "+5%"
   cosy:                       # CosyVoice2 本地大模型（Apache-2.0；RTX 4070 GPU 推理，质量第一梯队）
     enable: true              # 失败自动降级 edge→熔断池→Piper 旧链，产线不断
-    mode: "instruct2"         # 参考音频+风格指令（实测男声126Hz低沉纪录片腔，试听样片2号配方）
-    prompt_wav: "repo/asset/cross_lingual_prompt.wav"
-    instruct: "用低沉严肃的中文纪录片男声旁白解说"
+    preset: "jimu_default"    # 当前产线预设；试听切换: python tts_studio.py --apply <名>
+    presets:                  # 配音配方库（参考音频×指令措辞；A/B: python tts_studio.py）
+      jimu_default:           # 现行配方：跨语言参考音 + 低沉严肃指令
+        mode: "instruct2"
+        prompt_wav: "repo/asset/cross_lingual_prompt.wav"
+        instruct: "用低沉严肃的中文纪录片男声旁白解说"
+      jimu_calm:              # 同参考音，节奏更慢、句尾收束更沉稳
+        mode: "instruct2"
+        prompt_wav: "repo/asset/cross_lingual_prompt.wav"
+        instruct: "用低沉浑厚的中年男声，以纪录片解说的沉稳节奏旁白，语速平缓，句尾沉稳收束"
+      caizhi_calm:            # 素材自带男声 + 沉稳指令
+        mode: "instruct2"
+        prompt_wav: "../bili-history/tts_samples/cosy_0_素材自带男声.wav"
+        instruct: "用低沉浑厚的中年男声，以纪录片解说的沉稳节奏旁白，语速平缓，句尾沉稳收束"
+      caizhi_solemn:          # 素材自带男声 + 庄重克制
+        mode: "instruct2"
+        prompt_wav: "../bili-history/tts_samples/cosy_0_素材自带男声.wav"
+        instruct: "用沉稳大气的男声纪录片旁白，庄重克制，情感内敛"
 
 subtitle:
   force_style: ""             # 留空用内置纪录片样式（白字黑边+轻阴影）；可填 libass force_style 覆盖

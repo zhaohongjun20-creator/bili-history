@@ -12,8 +12,8 @@ config.yaml 主题池(30个, 状态机自动跳过已做/失败可恢复)
  → GLM 两步写稿（大纲JSON → 逐段扩写控字数；名言只用真实流传的）
  → 无记忆审查官（渲染前）：确定性检查 + GLM 审史实/配图/标题
    （服务异常不自动放行→等待重试；高危问题→成片停在待人工核实）
- → 配音四级链：edge-tts云端神经 → 音色熔断池 → Piper本地神经 → SAPI(默认禁用)
-   （CosyVoice2 本地大模型优先；按段缓存只补缺段）
+ → 配音四级链：CosyVoice2本地大模型(预设配方) → edge-tts云端神经 → Piper本地神经 → SAPI(默认禁用)
+   （A/B 试听台: python tts_studio.py 出样音对比，--apply <名> 切换产线预设）
  → 质量闸门：神经音色全灭时宁缺毋滥，拒绝机械音上线
  → Wikimedia Commons 配图（主池策略省请求；仅 PD/CC 许可，逐一署名）
  → Ken Burns 四向运镜 + Twemoji 贴纸 + 转场轮换池(fade/dissolve/wipe/circle/black)
