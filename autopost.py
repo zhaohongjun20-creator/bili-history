@@ -94,6 +94,7 @@ def assign_images(pool_size: int, n: int, max_reuse: int = 1) -> list:
 
 # ---- 公共层：与 bili-autopost-sau / see-china 共用同一份实现 ----
 # 开发仓库从 ../shared 导入；发货包内 shared/ 由 build_packages.py 拷到脚本同目录。
+# shared 不在仓库内（CI/新克隆环境没有）：导入失败时回退内置实现，保证独立可运行。
 import sys as _sys
 from pathlib import Path as _Path
 
@@ -102,16 +103,30 @@ for _base in (_here.parent, _here):
     if (_base / "shared").is_dir():
         _sys.path.insert(0, str(_base))
         break
-from shared import load_config as _shared_load_config
-from shared import setup_logging as _shared_setup_logging
+try:
+    from shared import load_config as _shared_load_config
+    from shared import setup_logging as _shared_setup_logging
 
+    def setup_logging():
+        _shared_setup_logging(LOG_DIR)
 
-def setup_logging():
-    _shared_setup_logging(LOG_DIR)
+    def load_config():
+        return _shared_load_config(ROOT / "config.yaml")
+except ImportError:                     # 独立运行（CI/新克隆）：内置等价实现
+    def setup_logging():
+        import logging as _logging
+        from datetime import datetime as _dt
+        os.makedirs(LOG_DIR, exist_ok=True)
+        _logging.basicConfig(
+            level=_logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+            handlers=[_logging.FileHandler(
+                f"{LOG_DIR}/{_dt.now():%Y-%m}.log", encoding="utf-8"),
+                _logging.StreamHandler()])
 
-
-def load_config():
-    return _shared_load_config(ROOT / "config.yaml")
+    def load_config():
+        import yaml
+        with open(ROOT / "config.yaml", encoding="utf-8") as f:
+            return yaml.safe_load(f)
 
 
 def _account_file(cfg: dict) -> Path:
