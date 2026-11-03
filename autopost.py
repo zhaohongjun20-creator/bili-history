@@ -92,18 +92,26 @@ def assign_images(pool_size: int, n: int, max_reuse: int = 1) -> list:
     return out
 
 
+# ---- 公共层：与 bili-autopost-sau / see-china 共用同一份实现 ----
+# 开发仓库从 ../shared 导入；发货包内 shared/ 由 build_packages.py 拷到脚本同目录。
+import sys as _sys
+from pathlib import Path as _Path
+
+_here = _Path(__file__).resolve().parent
+for _base in (_here.parent, _here):
+    if (_base / "shared").is_dir():
+        _sys.path.insert(0, str(_base))
+        break
+from shared import load_config as _shared_load_config
+from shared import setup_logging as _shared_setup_logging
+
+
 def setup_logging():
-    os.makedirs(LOG_DIR, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[logging.FileHandler(f"{LOG_DIR}/{datetime.now():%Y-%m}.log", encoding="utf-8"),
-                  logging.StreamHandler()])
+    _shared_setup_logging(LOG_DIR)
 
 
 def load_config():
-    import yaml
-    with open(ROOT / "config.yaml", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    return _shared_load_config(ROOT / "config.yaml")
 
 
 def _account_file(cfg: dict) -> Path:
@@ -664,7 +672,7 @@ def stage_upload(job, store, topic, doc, cfg, final, cover, assets, log,
     try:
         from src import stats as stats_mod
         stats_mod.collect_and_report(
-            store, int(cfg["bilibili"].get("mid", 1518025639)), log)
+            store, int(cfg["bilibili"].get("mid", 0)), log)
     except Exception as e:
         log.warning("战报生成异常(不影响发布): %s", e)
 
@@ -674,7 +682,7 @@ def stage_upload(job, store, topic, doc, cfg, final, cover, assets, log,
 def run(dry_run: bool, topic_index: int | None, redo: bool = False,
         fresh: bool = False, publish_only: bool = False,
         approve_review: bool = False, confirm_upload: bool = False,
-        mark_uploaded: bool = False, bvid: str = ""):
+        mark_uploaded: bool = False, bvid: str = "", ai_review: bool = False):
     log = logging.getLogger("main")
     load_dotenv(ROOT / ".env")
     cfg = load_config()
@@ -695,6 +703,8 @@ def run(dry_run: bool, topic_index: int | None, redo: bool = False,
     try:
         if publish_only:
             _publish_only(store, cfg, topic_index, log)
+        elif ai_review:
+            _ai_review(store, cfg, topic_index, log, dry_run, confirm_upload)
         elif mark_uploaded:
             _mark_uploaded(store, cfg, topic_index, bvid, log)
         else:
@@ -837,6 +847,182 @@ def _pipeline(store, cfg, topic_index, log, dry_run, redo, fresh,
             log.warning("抖音分发异常(不影响B站): %s", e)
 
 
+
+def _ensure_magpie_gateway():
+    """magpie 网关保活：codebuddy 的模型都走 127.0.0.1:3425。没起就静默拉起（无桌面）。"""
+    import socket
+    import subprocess as _sp
+    s = socket.socket()
+    if s.connect_ex(("127.0.0.1", 3425)) == 0:
+        s.close()
+        return True
+    s.close()
+    magpie = Path.home() / ".local" / "bin" / "magpie.exe"
+    if not magpie.exists():
+        return False
+    _sp.Popen([str(magpie), "web", "--gateway", "--no-open"],
+              creationflags=0x08000000)      # CREATE_NO_WINDOW
+    import time as _t
+    for _ in range(15):                      # 最多等 7.5s
+        _t.sleep(0.5)
+        c = socket.socket()
+        up = c.connect_ex(("127.0.0.1", 3425)) == 0
+        c.close()
+        if up:
+            return True
+    return False
+
+
+_AI_REVIEW_SCHEMA = ('{"type":"object","properties":{'
+                     '"verdict":{"type":"string","enum":["PASS","REJECT"]},'
+                     '"issues_confirmed":{"type":"array","items":{"type":"string"}},'
+                     '"issues_overruled":{"type":"array","items":{"type":"string"}},'
+                     '"new_findings":{"type":"array","items":{"type":"string"}},'
+                     '"summary":{"type":"string"}},"required":["verdict",'
+                     '"issues_confirmed","issues_overruled","new_findings","summary"]}')
+
+_AI_REVIEW_PROMPT = """你是B站军事历史频道的独立终审编辑。请阅读当前目录下的 script.json（讲稿全文）和 manifest.json（stages.review 里有产线GLM审查官提出的问题清单）。
+
+任务：
+1. 逐条核实审查官的问题是否属实（误报要驳回）；
+2. 独立复查讲稿：史实准确性（年代/人物/战役/武器/伤亡数字）、名言引语真伪（编造的名人语录是纪录片大忌，即使作者是知名人物也要核实是否有据可查）、配图文件名与段落的相关性、表述是否夸张或不当。
+
+判定标准：存在史实硬伤或伪造引语 → REJECT；仅有轻微措辞问题且史实无误 → PASS。
+逐条核实问题是否属实，并独立复查史实（年代/人物/战役/胜负）与引语真伪。
+输出格式（严格遵守）：第一行只写 PASS 或 REJECT；随后逐条给理由。基于证据，不要客套。
+这是无人值守自动流程：不要反问、不要请求下一步指示、不要提供选项——
+必须在本次回复中直接给出最终判定，否则流程会判定失败。"""
+
+
+def _run_codebuddy_review(job, log) -> dict | None:
+    """调 codebuddy CLI（magpie 网关）终审任务目录，返回结构化结论；失败返回 None。"""
+    import shutil
+    import subprocess
+    if not _ensure_magpie_gateway():
+        log.error("magpie 网关不可用（3425 未监听且无法拉起），AI 终审不可用")
+        return None
+    # Windows：npm 垫片是 codebuddy.cmd，裸名 CreateProcess 找不到（WinError 2）
+    cb = shutil.which("codebuddy") or shutil.which("codebuddy.cmd")
+    if not cb:
+        log.error("codebuddy 不在 PATH 中")
+        return None
+    try:
+        r = subprocess.run(
+            [cb, "-p", _AI_REVIEW_PROMPT, "--tools", "Read",
+             "--output-format", "text"],
+            cwd=str(job.dir), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=600)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.error("codebuddy 调用失败: %s", e)
+        return None
+    if r.returncode != 0:
+        log.error("codebuddy 非零退出: %s", (r.stderr or r.stdout)[-200:])
+        return None
+    try:                        # 诊断落盘：解析失败时留原文排查
+        (job.dir / "_ai_raw.txt").write_text(r.stdout, encoding="utf-8")
+    except OSError:
+        pass
+    return _parse_codebuddy_verdict(r.stdout, log)
+
+
+def _parse_codebuddy_verdict(stdout: str, log) -> dict | None:
+    """解析 codebuddy 终审输出。主形态：text 模式（首词 PASS/REJECT + 理由）；
+    兜底：JSON 数组形态（--output-format json 不稳，偶尔数组/文本/截断）里
+    提取 result 文本中的结构化结论。两种形态都拿不到明确结论 → None（fail-closed）。
+    """
+    import json as _json
+    import re as _re
+    text = stdout.strip()
+
+    def _from_dict(d):
+        if isinstance(d, dict) and d.get("verdict") in ("PASS", "REJECT"):
+            return d
+        return None
+
+    # 主形态1：JSON 数组 → result 文本 → ```json 块 / {...}（结构化优先）
+    data = None
+    try:
+        data = _json.loads(stdout)
+    except ValueError:
+        data = None
+    if isinstance(data, list):
+        data = next((x.get("result") for x in reversed(data)
+                     if isinstance(x, dict) and x.get("type") == "result"), None)
+    if isinstance(data, str):
+        mb = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", data, _re.S) or \
+            _re.search(r"\{.*\}", data, _re.S)
+        if mb:
+            try:
+                data = _json.loads(mb.group(1) if mb.groups() else mb.group(0))
+            except ValueError:
+                data = None
+    out = _from_dict(data)
+    if out is not None:
+        return out
+
+    # 主形态2：纯 text——第一行（或首个非空行）就是 PASS/REJECT
+    verdict = None
+    m = _re.match(r"(PASS|REJECT)\b", text, _re.I)
+    if m:
+        verdict = m.group(1).upper()
+    else:
+        # 兜底（模型偶发开场白/中文包裹判定词），按证据强度分层：
+        # 1) 粗体或括号包裹的判定词（**REJECT**/（reject））——终判标记，取最后一次；
+        # 2) 独立判定词（前后非字母数字），取最后一次（最终结论）。
+        wrapped = _re.findall(
+            r"[*＊（(【\[]\s*(pass|reject)\s*[*＊）)】\]]", text, _re.I)
+        hits = wrapped or _re.findall(r"(?<!\w)(pass|reject)(?!\w)", text, _re.I)
+        if hits:
+            verdict = hits[-1].upper()
+    if verdict:
+        lines = [l.strip() for l in text.splitlines() if l.strip()][1:]
+        reasons = [l for l in lines if l and not l.startswith("```")]
+        return {"verdict": verdict, "summary": "；".join(reasons)[:800]}
+    log.error("AI 终审结论无法解析（无明确 PASS/REJECT）")
+    return None
+
+
+def _ai_review(store, cfg, topic_index, log, dry_run, confirm_upload):
+    """人工闸门交给 AI 终审（codebuddy/WorkBuddy 走 magpie 网关）：
+    PASS → 自动放行继续制作；REJECT → review-rejected 留痕。"""
+    import json as _json
+    import datetime as _dt
+    if topic_index is None:
+        log.error("--ai-review 需要主题序号")
+        return
+    topic = cfg["topics"][topic_index - 1]
+    job = jobs_mod.Job.find_resumable(JOBS_DIR, topic)
+    if job is None or (job.stage("review") or {}).get("status") != "needs-human":
+        log.warning("该题没有待审核的审查记录")
+        return
+    verdict = _run_codebuddy_review(job, log)
+    if verdict is None:
+        log.error("AI 终审失败——保持 needs-human，不自动放行也不否决（fail-closed）")
+        return
+    stamp = _dt.datetime.now().isoformat(timespec="seconds")
+    for k in ("issues_confirmed", "issues_overruled", "new_findings", "summary"):
+        val = verdict.get(k)
+        items = val if isinstance(val, list) else ([val] if val else [])
+        for line in items:
+            log.info("🤖 AI终审[%s] %s", k, str(line)[:160])
+    if verdict["verdict"] == "PASS":
+        job.manifest["stages"]["review"] = {
+            "status": "done", "key": (job.stage("review") or {}).get("key", ""),
+            "verdict": "pass", "approved_by": "codebuddy",
+            "ai_review": verdict, "approved_at": stamp}
+        job.save()
+        log.info("🤖 AI 终审 PASS（《%s》），继续制作", topic)
+    else:
+        job.manifest["stages"]["review"].update({
+            "status": "rejected", "rejected_by": "codebuddy",
+            "ai_review": verdict, "rejected_at": stamp})
+        job.save()
+        store.mark_review_rejected(topic, job_id=job.job_id)
+        log.warning("🤖 AI 终审 REJECT——本期否决留痕，重做: --redo %d --fresh", topic_index)
+        return
+    _pipeline(store, cfg, topic_index, log, dry_run, redo=False, fresh=False)
+
+
 def _publish_only(store, cfg, topic_index, log):
     """只投稿：找已过质检未发布的任务（人工核实后的发布通道）。"""
     jobs_root = Path(JOBS_DIR)
@@ -905,6 +1091,8 @@ if __name__ == "__main__":
     ap.add_argument("--fresh", action="store_true", help="连同产物缓存一起废弃")
     ap.add_argument("--publish-only", action="store_true",
                     help="只投稿已过质检的成片（人工核实后）")
+    ap.add_argument("--ai-review", action="store_true",
+                    help="人工闸门交给 AI 终审（codebuddy/magpie 网关）：PASS 放行制作，REJECT 否决留痕")
     ap.add_argument("--approve-review", action="store_true",
                     help="人工放行待审核的讲稿（配合主题序号）")
     ap.add_argument("--confirm-upload", action="store_true",
@@ -918,4 +1106,4 @@ if __name__ == "__main__":
     run(args.dry_run, args.topic, redo=args.redo, fresh=args.fresh,
         publish_only=args.publish_only, approve_review=args.approve_review,
         confirm_upload=args.confirm_upload, mark_uploaded=args.mark_uploaded,
-        bvid=args.bvid)
+        bvid=args.bvid, ai_review=args.ai_review)

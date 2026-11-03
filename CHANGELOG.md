@@ -2,6 +2,34 @@
 
 本格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化。
 
+## [0.7.6] - 2026-11-03
+
+AI 终审闸门：人工审核环节交给外部 AI（codebuddy/WorkBuddy，经 magpie 本地网关，无桌面 GUI）。
+
+### 新增
+- **`--ai-review N`**：选题停在 review-human 闸门时，把 script/manifest 交给 codebuddy
+  独立终审——PASS 自动放行续做（approved_by=codebuddy），REJECT 否决留痕
+  （rejected_by=codebuddy + 完整理由入 manifest），结论无法解析时 fail-closed
+  保持 needs-human（不误放行也不误否决）。
+- **magpie 网关保活**：codebuddy 模型走 127.0.0.1:3425 网关，未起时自动以
+  `magpie web --gateway --no-open` 静默拉起（无桌面窗口）。
+- **终审输出解析**（实战四轮迭代收口）：JSON 结构化优先；text 形态首词判定；
+  兜底分层扫描判定词（粗体/括号包裹优先、独立词取最后一次、大小写不敏感）；
+  失败落盘 `_ai_raw.txt` 供排查。Windows 下 codebuddy 需完整解析 .cmd 垫片路径。
+- **主题年份锚点**：新题标题内嵌年份区间（治写稿模型年代错写根因）。
+
+### 实战验证（今日 6 稿全部被闸门正确处理）
+- 马奇诺 v1/v2、哈尔科夫 v1/v2 共 4 稿被 AI 终审否决——理由全部属实：
+  伪造白名单作者引语（克劳塞维茨/丘吉尔）、年份错写（1943→1942）、
+  伤亡数字离谱、7 张无关配图（含 1333 年战场/2015 美军照片混入）。
+  其中 AI 终审同时驳回了产线 GLM 审查官的 2 条误报——双层审查互补生效。
+- 写稿模型（glm-4-flash）在新题上翻车率过高的问题暴露：连续 6 稿不合格，
+  断点续跑与闸门拦截正常（未流出任何烂稿），但出片效率需升级写稿模型解决。
+
+### 测试
+- 125 项全绿（+AI 终审解析/放行/否决/网关失败 fail-closed/text 形态回放）。
+
+
 ## [0.7.5] - 2026-10-29
 
 配音预设体系 + A/B 试听台：把"CosyVoice2 配方调优"从改代码变成改配置。

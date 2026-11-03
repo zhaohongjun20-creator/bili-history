@@ -32,6 +32,13 @@ topics:
   - "魏特曼与波卡基村：一辆虎式的奇迹冲锋"
   - "冬季战争：芬兰如何以寡敌众"
 
+  # ↓ 2026-11-03 补充主题池（原池做完）
+  - "硫磺岛战役（1945年2-3月）：折钵山升起的那面旗"
+  - "法莱斯口袋（1944年8月）：德军最后的突围噩梦"
+  - "第三次哈尔科夫战役（1943年2-3月）：曼施坦因的回马枪"
+  - "雷马根大桥（1945年3月）：莱茵河上意外的胜利之门"
+  - "突尼斯战役（1943年5月）：非洲军团的末路"
+
 video:
   width: 1920
   height: 1080
@@ -65,6 +72,10 @@ narrator:
         mode: "instruct2"
         prompt_wav: "repo/asset/cross_lingual_prompt.wav"
         instruct: "用低沉严肃的中文纪录片男声旁白解说"
+      intro_warm:             # 项目介绍片专用：温暖口语、轻松真诚（workbuddy 审查意见）
+        mode: "instruct2"
+        prompt_wav: "repo/asset/cross_lingual_prompt.wav"
+        instruct: "用温暖自然的中青年男声，像给朋友介绍自己做的项目，语速稍快，语气轻松真诚"
       jimu_calm:              # 同参考音，节奏更慢、句尾收束更沉稳
         mode: "instruct2"
         prompt_wav: "repo/asset/cross_lingual_prompt.wav"
@@ -110,4 +121,4 @@ copywriter:
   model: "glm-4-flash"
   temperature: 0.7
 
-bgm_dir: "bgm"          # 从 bili-autopost-sau 曲库复制，或自行扩充
+bgm_dir: "bgm"          # 曲库目录（内置 6 首 CC 授权曲目，可自行扩充）
