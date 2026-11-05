@@ -137,7 +137,7 @@ def _account_file(cfg: dict) -> Path:
 # ── 阶段实现：已缓存则跳过，否则执行并写 manifest ──────────────────────
 
 def stage_script(job, topic, cfg, log) -> dict:
-    """① 讲稿：字数不达标重试一次。产物 script.json。"""
+    """① 讲稿：总字数不够时只补写偏短的段（一轮），不重出大纲。产物 script.json。"""
     vc = cfg["video"]
     key = jobs_mod.cache_key(
         topic=topic, v=V_SCRIPT, model=cfg["copywriter"]["model"],
@@ -150,21 +150,28 @@ def stage_script(job, topic, cfg, log) -> dict:
         return doc
 
     job.mark_running("script", key)
-    min_chars = vc["sections_min"] * vc["chars_per_section"][0]
+    c_lo, c_hi = vc["chars_per_section"]
+    min_chars = vc["sections_min"] * c_lo
     try:
-        for attempt in range(2):
-            doc = script_mod.generate(
-                os.environ.get("ZHIPU_API_KEY", ""), topic,
-                model=cfg["copywriter"]["model"], temperature=cfg["copywriter"]["temperature"],
-                n_min=vc["sections_min"], n_max=vc["sections_max"],
-                c_lo=vc["chars_per_section"][0], c_hi=vc["chars_per_section"][1])
-            total = sum(len(s["text"]) for s in doc["sections"])
-            if total >= min_chars:
-                break
-            log.warning("讲稿太短(%d字 < %d)，重试", total, min_chars)
+        doc = script_mod.generate(
+            os.environ.get("ZHIPU_API_KEY", ""), topic,
+            model=cfg["copywriter"]["model"], temperature=cfg["copywriter"]["temperature"],
+            n_min=vc["sections_min"], n_max=vc["sections_max"],
+            c_lo=c_lo, c_hi=c_hi)
+        total = sum(len(s["text"]) for s in doc["sections"])
+        if total < min_chars:
+            # 一轮封顶：补写后仍短也落盘，不再整篇 generate()
+            log.warning("讲稿太短(%d字 < %d)，只补写偏短段落", total, min_chars)
+            doc = script_mod.expand_short_sections(
+                os.environ.get("ZHIPU_API_KEY", ""), doc,
+                model=cfg["copywriter"]["model"],
+                temperature=cfg["copywriter"]["temperature"],
+                c_lo=c_lo, c_hi=c_hi)
     except Exception as e:
         job.mark_failed("script", e)
         raise StageError("script", e) from e
+    for sec in doc["sections"]:
+        sec.pop("point", None)          # 要点只供补写，不写入成片用的讲稿
     Path(job.path("script.json")).write_text(
         json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
     job.mark_done("script", key, {"script": "script.json"})

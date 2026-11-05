@@ -110,14 +110,30 @@ def _parse(raw: str):
     return None
 
 
+def _in_len_window(n: int, c_lo: int, c_hi: int) -> bool:
+    """单段接受窗口：配置字数上下各留一点余量，差几个字不必重打。"""
+    return c_lo - 15 <= n <= c_hi + 30
+
+
+def _section_too_short(text: str, c_lo: int) -> bool:
+    """低于窗口下沿才算偏短。超上限的段不算短，总字数不够时也不重写。"""
+    return len(text) < c_lo - 15
+
+
+def _expand_once(api_key: str, point: str, model: str, temperature: float,
+                 c_lo: int, c_hi: int) -> str:
+    """单次扩写，不再内部重试。补写轮用它，避免补写自己再循环。"""
+    return _chat(api_key, EXPAND_PROMPT.format(
+        point=point, c_lo=c_lo, c_hi=c_hi), model, temperature).strip()
+
+
 def _expand(api_key: str, point: str, model: str, temperature: str,
             c_lo: int, c_hi: int) -> str:
     """单段展开，字数不达标重试一次。"""
     text = ""
     for _ in range(2):
-        text = _chat(api_key, EXPAND_PROMPT.format(
-            point=point, c_lo=c_lo, c_hi=c_hi), model, temperature).strip()
-        if c_lo - 15 <= len(text) <= c_hi + 30:
+        text = _expand_once(api_key, point, model, temperature, c_lo, c_hi)
+        if _in_len_window(len(text), c_lo, c_hi):
             return text
     return text
 
@@ -157,6 +173,25 @@ def _strip_fabricated_quotes(text: str, allowed: set) -> tuple[str, list]:
     return "".join(out_sents), stripped
 
 
+def _quote_author(sec: dict) -> str | None:
+    quote = sec.get("quote")
+    if isinstance(quote, dict):
+        author = quote.get("author")
+        return author if isinstance(author, str) and author else None
+    return None
+
+
+def _finish_narration(text: str, author: str | None) -> str:
+    """扩写后剥掉白名单外署名引语。author 是本段 quote 作者，允许保留。"""
+    allowed = set(QUOTE_AUTHOR_WHITELIST)
+    if author:
+        allowed.add(author)
+    text, stripped = _strip_fabricated_quotes(text, allowed)
+    if stripped:
+        print(f"[script] 剥除编造署名引语: {stripped}")
+    return text
+
+
 def generate(api_key: str, topic: str, model: str = "glm-4-flash",
              temperature: float = 0.7, n_min: int = 8, n_max: int = 11,
              c_lo: int = 70, c_hi: int = 110) -> dict:
@@ -171,18 +206,38 @@ def generate(api_key: str, topic: str, model: str = "glm-4-flash",
 
     sections = []
     for sec in outline["sections"]:
-        text = _expand(api_key, sec["point"], model, temperature, c_lo, c_hi)
-        allowed = set(QUOTE_AUTHOR_WHITELIST)
-        if sec.get("quote", {}).get("author"):
-            allowed.add(sec["quote"]["author"])
-        text, stripped = _strip_fabricated_quotes(text, allowed)
-        if stripped:
-            print(f"[script] 剥除编造署名引语: {stripped}")
+        text = _finish_narration(
+            _expand(api_key, sec["point"], model, temperature, c_lo, c_hi),
+            _quote_author(sec))
         sections.append({"text": text,
                          "image_query": sec.get("image_query") or topic,
                          "stickers": sec.get("stickers") or [],
-                         "quote": sec.get("quote") or None})
+                         "quote": sec.get("quote") or None,
+                         "point": sec["point"]})
     title = outline["title"]
     if not _has_hook(title):
         title = _refine_title(api_key, title, topic, model)
     return {"title": title, "sections": sections, "tags": outline["tags"]}
+
+
+def expand_short_sections(api_key: str, doc: dict, model: str,
+                          temperature: float, c_lo: int, c_hi: int) -> dict:
+    """总字数不够时的一轮补写：大纲和已达标的段留下，只重打仍偏短的段。
+
+    每段最多再扩写一次，本函数本身不循环。补写后仍短也保留新文本，
+    由调用方照常落盘，不把已经付过费的稿丢掉。
+    """
+    sections = []
+    for sec in doc["sections"]:
+        text = sec.get("text") or ""
+        point = sec.get("point") or ""
+        if not _section_too_short(text, c_lo) or not point:
+            sections.append(sec)
+            continue
+        new_text = _finish_narration(
+            _expand_once(api_key, point, model, temperature, c_lo, c_hi),
+            _quote_author(sec))
+        updated = dict(sec)
+        updated["text"] = new_text
+        sections.append(updated)
+    return {**doc, "sections": sections}
