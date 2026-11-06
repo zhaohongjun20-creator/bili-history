@@ -30,7 +30,7 @@ def _run(tmp_path, monkeypatch, sections, replies):
     }
     prompts = []
 
-    def fake_chat(api_key, prompt, model, temperature):
+    def fake_chat(api_key, prompt, model, temperature, base_url=""):
         prompts.append(prompt)
         if "你是B站军事历史区编导" in prompt:
             return json.dumps(outline, ensure_ascii=False)

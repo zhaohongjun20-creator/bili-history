@@ -238,7 +238,8 @@ def generate(api_key: str, topic: str, model: str = "glm-4-flash",
 
 
 def expand_short_sections(api_key: str, doc: dict, model: str,
-                          temperature: float, c_lo: int, c_hi: int) -> dict:
+                          temperature: float, c_lo: int, c_hi: int,
+                          base_url: str = "") -> dict:
     """总字数不够时的一轮补写：大纲和已达标的段留下，只重打仍偏短的段。
 
     每段最多再扩写一次，本函数本身不循环。补写后仍短也保留新文本，
@@ -252,7 +253,8 @@ def expand_short_sections(api_key: str, doc: dict, model: str,
             sections.append(sec)
             continue
         new_text = _finish_narration(
-            _expand_once(api_key, point, model, temperature, c_lo, c_hi),
+            _expand_once(api_key, point, model, temperature, c_lo, c_hi,
+                         base_url),
             _quote_author(sec))
         updated = dict(sec)
         updated["text"] = new_text
