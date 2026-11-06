@@ -118,7 +118,11 @@ qc:
   av_duration_slack: 2.0     # 音视频时长允许偏差（秒）
 
 copywriter:
-  model: "glm-4-flash"
+  # 写稿走 magpie 网关（本地 3425，复用 codebuddy 订阅的 DeepSeek-V4-Pro，
+  # 军史常识显著强于 glm-4-flash；智谱账号无付费余额，plus/air 不可用）
+  base_url: "http://127.0.0.1:3425/v1/chat/completions"
+  api_key_env: "MAGPIE_KEY"
+  model: "zcode/GLM-5.3"      # 网关用全限定 ID（provider/model）；写稿，军史常识强
   temperature: 0.7
 
 bgm_dir: "bgm"          # 曲库目录（内置 6 首 CC 授权曲目，可自行扩充）

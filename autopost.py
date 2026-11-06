@@ -141,6 +141,7 @@ def stage_script(job, topic, cfg, log) -> dict:
     vc = cfg["video"]
     key = jobs_mod.cache_key(
         topic=topic, v=V_SCRIPT, model=cfg["copywriter"]["model"],
+        base_url=cfg["copywriter"].get("base_url") or "",
         temperature=cfg["copywriter"]["temperature"],
         n_min=vc["sections_min"], n_max=vc["sections_max"],
         c_lo=vc["chars_per_section"][0], c_hi=vc["chars_per_section"][1])
@@ -153,21 +154,22 @@ def stage_script(job, topic, cfg, log) -> dict:
     c_lo, c_hi = vc["chars_per_section"]
     min_chars = vc["sections_min"] * c_lo
     try:
+        _cw = cfg["copywriter"]
+        _key = (_cw.get("api_key") or "magpie-codebuddy")             if _cw.get("base_url") else os.environ.get("ZHIPU_API_KEY", "")
+        _common = dict(model=_cw["model"],
+                       temperature=_cw.get("temperature", 0.7),
+                       base_url=_cw.get("base_url") or "")
         doc = script_mod.generate(
-            os.environ.get("ZHIPU_API_KEY", ""), topic,
-            model=cfg["copywriter"]["model"], temperature=cfg["copywriter"]["temperature"],
-            n_min=vc["sections_min"], n_max=vc["sections_max"],
-            c_lo=c_lo, c_hi=c_hi)
+            _key, topic, n_min=vc["sections_min"], n_max=vc["sections_max"],
+            c_lo=c_lo, c_hi=c_hi, **_common)
         total = sum(len(s["text"]) for s in doc["sections"])
         if total < min_chars:
             # 一轮封顶：补写后仍短也落盘，不再整篇 generate()
             log.warning("讲稿太短(%d字 < %d)，只补写偏短段落", total, min_chars)
             doc = script_mod.expand_short_sections(
-                os.environ.get("ZHIPU_API_KEY", ""), doc,
-                model=cfg["copywriter"]["model"],
-                temperature=cfg["copywriter"]["temperature"],
-                c_lo=c_lo, c_hi=c_hi)
+                _key, doc, c_lo=c_lo, c_hi=c_hi, **_common)
     except Exception as e:
+        log.exception("讲稿生成异常（完整栈）")   # 36 秒即败的 NoneType 类问题需要栈定位
         job.mark_failed("script", e)
         raise StageError("script", e) from e
     for sec in doc["sections"]:
@@ -708,6 +710,8 @@ def run(dry_run: bool, topic_index: int | None, redo: bool = False,
     log = logging.getLogger("main")
     load_dotenv(ROOT / ".env")
     cfg = load_config()
+    if cfg.get("copywriter", {}).get("base_url"):
+        _ensure_magpie_gateway()      # 写稿走网关：启动即保活（隔夜进程会退）
     account_file = _account_file(cfg)
     publishing = not dry_run
     preflight.preflight_or_die(cfg, ROOT, publishing=publishing,
@@ -913,7 +917,7 @@ _AI_REVIEW_PROMPT = """你是B站军事历史频道的独立终审编辑。请�
 逐条核实问题是否属实，并独立复查史实（年代/人物/战役/胜负）与引语真伪。
 输出格式（严格遵守）：第一行只写 PASS 或 REJECT；随后逐条给理由。基于证据，不要客套。
 这是无人值守自动流程：不要反问、不要请求下一步指示、不要提供选项——
-必须在本次回复中直接给出最终判定，否则流程会判定失败。"""
+本次回复的最后一行必须恰好是 VERDICT: PASS 或 VERDICT: REJECT（单独一行，无其他文字）。"""
 
 
 def _run_codebuddy_review(job, log) -> dict | None:
@@ -929,11 +933,14 @@ def _run_codebuddy_review(job, log) -> dict | None:
         log.error("codebuddy 不在 PATH 中")
         return None
     try:
+        model = os.environ.get("CODEBUDDY_MODEL", "glm-5.2")  # 与写稿(glm-5.3)异构，避免自审偏袒
+        # prompt 必须走 stdin：长中文经 .cmd 垫片 argv 传参会静默丢失
+        # （rc=0 + stdout 空 + stderr 报默认模型 400）
         r = subprocess.run(
-            [cb, "-p", _AI_REVIEW_PROMPT, "--tools", "Read",
+            [cb, "-p", "--tools", "Read", "--model", model,
              "--output-format", "text"],
-            cwd=str(job.dir), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=600)
+            input=_AI_REVIEW_PROMPT, cwd=str(job.dir), capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=600)
     except (OSError, subprocess.TimeoutExpired) as e:
         log.error("codebuddy 调用失败: %s", e)
         return None
@@ -942,6 +949,7 @@ def _run_codebuddy_review(job, log) -> dict | None:
         return None
     try:                        # 诊断落盘：解析失败时留原文排查
         (job.dir / "_ai_raw.txt").write_text(r.stdout, encoding="utf-8")
+        (job.dir / "_ai_err.txt").write_text(r.stderr or "", encoding="utf-8")
     except OSError:
         pass
     return _parse_codebuddy_verdict(r.stdout, log)
@@ -982,20 +990,25 @@ def _parse_codebuddy_verdict(stdout: str, log) -> dict | None:
     if out is not None:
         return out
 
-    # 主形态2：纯 text——第一行（或首个非空行）就是 PASS/REJECT
+    # 主形态2：纯 text。判定提取优先级：
+    # a) VERDICT: PASS/REJECT（prompt 强制结尾格式）；b) 首词；
+    # c) 包裹判定词（**REJECT**/（reject））；d) 独立判定词——各取最后一次；
+    # e) 中文判定词（驳回/否决/不通过 → REJECT）
     verdict = None
+    mv = _re.search(r"VERDICT\s*[:：]\s*(PASS|REJECT)", text, _re.I)
+    if mv:
+        verdict = mv.group(1).upper()
     m = _re.match(r"(PASS|REJECT)\b", text, _re.I)
-    if m:
+    if not verdict and m:
         verdict = m.group(1).upper()
-    else:
-        # 兜底（模型偶发开场白/中文包裹判定词），按证据强度分层：
-        # 1) 粗体或括号包裹的判定词（**REJECT**/（reject））——终判标记，取最后一次；
-        # 2) 独立判定词（前后非字母数字），取最后一次（最终结论）。
+    if not verdict:
         wrapped = _re.findall(
             r"[*＊（(【\[]\s*(pass|reject)\s*[*＊）)】\]]", text, _re.I)
         hits = wrapped or _re.findall(r"(?<!\w)(pass|reject)(?!\w)", text, _re.I)
         if hits:
             verdict = hits[-1].upper()
+    if not verdict and _re.search(r"驳回|否决|不通过|退回重写|退回修正", text):
+        verdict = "REJECT"
     if verdict:
         lines = [l.strip() for l in text.splitlines() if l.strip()][1:]
         reasons = [l for l in lines if l and not l.startswith("```")]
@@ -1035,14 +1048,50 @@ def _ai_review(store, cfg, topic_index, log, dry_run, confirm_upload):
         job.save()
         log.info("🤖 AI 终审 PASS（《%s》），继续制作", topic)
     else:
-        job.manifest["stages"]["review"].update({
-            "status": "rejected", "rejected_by": "codebuddy",
-            "ai_review": verdict, "rejected_at": stamp})
-        job.save()
-        store.mark_review_rejected(topic, job_id=job.job_id)
-        log.warning("🤖 AI 终审 REJECT——本期否决留痕，重做: --redo %d --fresh", topic_index)
-        return
+        # 返修上限（用户定的规矩）：同一题最多被打回 3 次，第 3 次修改后的
+        # 版本（本轮就是）无论结论如何直接发布——审查是闸门不是死循环。
+        prior = _count_prior_rejections(job.dir.parent, topic)
+        if prior >= 3:
+            job.manifest["stages"]["review"] = {
+                "status": "done", "key": (job.stage("review") or {}).get("key", ""),
+                "verdict": "pass", "approved_by": "codebuddy-forced",
+                "ai_review": verdict, "approved_at": stamp,
+                "forced_note": f"已返修{prior}轮达上限，强制发布"}
+            job.save()
+            log.warning("🤖 AI 终审 REJECT 但已返修 %d 轮达上限——按规矩强制发布", prior)
+        else:
+            job.manifest["stages"]["review"].update({
+                "status": "rejected", "rejected_by": "codebuddy",
+                "ai_review": verdict, "rejected_at": stamp,
+                "round": prior + 1})
+            job.save()
+            store.mark_review_rejected(topic, job_id=job.job_id)
+            log.warning("🤖 AI 终审 REJECT（第%d轮）——留痕并自动重做", prior + 1)
+            store.reset_topic(topic)          # 自动重做：不再需要手动 --redo
+            _pipeline(store, cfg, topic_index, log, dry_run, redo=False,
+                      fresh=True)             # 重写全稿（旧稿已被否决）
+            return
     _pipeline(store, cfg, topic_index, log, dry_run, redo=False, fresh=False)
+
+
+def _count_prior_rejections(jobs_root, topic: str) -> int:
+    """该选题历史上被 AI 终审打回的轮数（扫各任务 manifest，跨任务累计）。"""
+    import json as _json
+    n = 0
+    root = Path(jobs_root)
+    if not root.is_dir():
+        return 0
+    for d in root.iterdir():
+        try:
+            m = _json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if m.get("topic") != topic:
+            continue
+        rv = (m.get("stages") or {}).get("review") or {}
+        if rv.get("rejected_by") == "codebuddy" or rv.get("status") == "rejected":
+            n += 1
+    return n
 
 
 def _publish_only(store, cfg, topic_index, log):

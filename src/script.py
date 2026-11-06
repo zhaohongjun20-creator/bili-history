@@ -66,11 +66,12 @@ def _has_hook(title: str) -> bool:
             and bool(_HOOK_RE.search(title)) and not _LABEL_RE.search(title))
 
 
-def _refine_title(api_key: str, title: str, topic: str, model: str) -> str:
+def _refine_title(api_key: str, title: str, topic: str, model: str,
+                    base_url: str = "") -> str:
     """平铺直叙标题 → 单独重写一次（便宜，单条调用），失败保留原题。"""
     try:
         raw = _chat(api_key, TITLE_FIX_PROMPT.format(
-            title=title, topic=topic), model, 0.9)
+            title=title, topic=topic), model, 0.9, base_url)
         # GLM 常返回多个候选（编号列表），拆行去编号，选第一个过钩子的
         cands = [re.sub(r'^\s*\d+[.、)]\s*', '', ln).strip().strip('"「」')
                  for ln in raw.splitlines()]
@@ -82,16 +83,26 @@ def _refine_title(api_key: str, title: str, topic: str, model: str) -> str:
         return title
 
 
-def _chat(api_key: str, prompt: str, model: str, temperature: float) -> str:
-    r = requests.post(
-        ZHIPU_URL,
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={"model": model, "temperature": temperature,
-              "messages": [{"role": "user", "content": prompt}]},
-        timeout=120,
-    )
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+def _chat(api_key: str, prompt: str, model: str, temperature: float,
+          base_url: str = "") -> str:
+    """单次对话。网关（base_url）429/5xx 指数退避重试——订阅限流窗口常见。"""
+    import time as _time
+    url = base_url or ZHIPU_URL
+    timeout = 420 if base_url else 180
+    for attempt in range(4):                  # 3 次重试：20s/40s/80s
+        r = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"model": model, "temperature": temperature,
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=timeout,
+        )
+        if r.status_code in (429, 500, 502, 503, 504) and attempt < 3:
+            _time.sleep(20 * (attempt + 1))
+            continue
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+    raise RuntimeError(f"chat retries exhausted: {url}")
 
 
 def _parse(raw: str):
@@ -121,18 +132,20 @@ def _section_too_short(text: str, c_lo: int) -> bool:
 
 
 def _expand_once(api_key: str, point: str, model: str, temperature: float,
-                 c_lo: int, c_hi: int) -> str:
+                 c_lo: int, c_hi: int, base_url: str = "") -> str:
     """单次扩写，不再内部重试。补写轮用它，避免补写自己再循环。"""
     return _chat(api_key, EXPAND_PROMPT.format(
-        point=point, c_lo=c_lo, c_hi=c_hi), model, temperature).strip()
+        point=point, c_lo=c_lo, c_hi=c_hi), model, temperature,
+        base_url).strip()
 
 
 def _expand(api_key: str, point: str, model: str, temperature: str,
-            c_lo: int, c_hi: int) -> str:
+            c_lo: int, c_hi: int, base_url: str = "") -> str:
     """单段展开，字数不达标重试一次。"""
     text = ""
     for _ in range(2):
-        text = _expand_once(api_key, point, model, temperature, c_lo, c_hi)
+        text = _expand_once(api_key, point, model, temperature, c_lo, c_hi,
+                            base_url)
         if _in_len_window(len(text), c_lo, c_hi):
             return text
     return text
@@ -194,10 +207,11 @@ def _finish_narration(text: str, author: str | None) -> str:
 
 def generate(api_key: str, topic: str, model: str = "glm-4-flash",
              temperature: float = 0.7, n_min: int = 8, n_max: int = 11,
-             c_lo: int = 70, c_hi: int = 110) -> dict:
+             c_lo: int = 70, c_hi: int = 110, base_url: str = "") -> dict:
     for _ in range(2):
         raw = _chat(api_key, OUTLINE_PROMPT.format(
-            topic=topic, n_min=n_min, n_max=n_max), model, temperature)
+            topic=topic, n_min=n_min, n_max=n_max), model, temperature,
+            base_url)
         outline = _parse(raw)
         if outline and outline.get("sections"):
             break
@@ -206,8 +220,11 @@ def generate(api_key: str, topic: str, model: str = "glm-4-flash",
 
     sections = []
     for sec in outline["sections"]:
+        if not isinstance(sec, dict) or not sec.get("point"):
+            continue                  # 推理模型偶发在 sections 数组里混 null/空元素
         text = _finish_narration(
-            _expand(api_key, sec["point"], model, temperature, c_lo, c_hi),
+            _expand(api_key, sec["point"], model, temperature, c_lo, c_hi,
+                    base_url),
             _quote_author(sec))
         sections.append({"text": text,
                          "image_query": sec.get("image_query") or topic,
@@ -216,7 +233,7 @@ def generate(api_key: str, topic: str, model: str = "glm-4-flash",
                          "point": sec["point"]})
     title = outline["title"]
     if not _has_hook(title):
-        title = _refine_title(api_key, title, topic, model)
+        title = _refine_title(api_key, title, topic, model, base_url)
     return {"title": title, "sections": sections, "tags": outline["tags"]}
 
 

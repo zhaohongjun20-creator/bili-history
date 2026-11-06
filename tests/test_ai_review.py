@@ -77,10 +77,12 @@ def test_ai_review_reject_marks_rejected(tmp_path, monkeypatch):
     cfg = {"topics": ["AI否决选题"]}
     store = Store(str(tmp_path / "t.db"))
     autopost._ai_review(store, cfg, 1, log, dry_run=True, confirm_upload=False)
-    assert ran == []
+    # 2026-11-07 新规矩：REJECT 留痕后自动重做（不再需要手动 --redo）
+    assert ran == [True]
     assert job.stage("review")["status"] == "rejected"
     assert job.stage("review")["rejected_by"] == "codebuddy"
-    assert store.get_topic("AI否决选题")["status"] == "review-rejected"
+    assert job.stage("review")["round"] == 1
+    assert store.get_topic("AI否决选题")["status"] == "pending"  # 已自动复位
 
 
 def test_ai_review_gateway_fail_stays_human(tmp_path, monkeypatch):
@@ -112,3 +114,54 @@ def test_parse_no_verdict_fails_closed():
     """输出无明确结论（如中途截断的状态文本）→ None。"""
     assert autopost._parse_codebuddy_verdict(
         "已读完三份关键文件，确认了任务上下文，正在分析……", log) is None
+
+def test_ai_review_third_rejection_forced_publish(tmp_path, monkeypatch):
+    """同一题被打回 3 次后，第 4 轮 REJECT 也强制放行（用户定的规矩）。"""
+    job = Job.create(tmp_path / "jobs", "三轮选题")
+    job.mark_done("script", "k")
+    job.manifest["stages"]["review"] = {"status": "needs-human", "key": "kk"}
+    job.save()
+    # 造 3 个历史被否决任务
+    for i in range(3):
+        old = Job.create(tmp_path / "jobs", "三轮选题")
+        old.manifest["stages"]["review"] = {
+            "status": "rejected", "rejected_by": "codebuddy", "round": i + 1}
+        old.save()
+    monkeypatch.setattr(
+        autopost.jobs_mod.Job, "find_resumable",
+        classmethod(lambda cls, root, topic, **kw: job))
+    monkeypatch.setattr(
+        autopost, "_run_codebuddy_review",
+        lambda j, lg: {"verdict": "REJECT", "issues_confirmed": ["仍有问题"],
+                       "issues_overruled": [], "new_findings": [], "summary": "还是不行"})
+    ran = []
+    monkeypatch.setattr(autopost, "_pipeline", lambda *a, **kw: ran.append(1))
+    cfg = {"topics": ["三轮选题"]}
+    store = Store(str(tmp_path / "t.db"))
+    autopost._ai_review(store, cfg, 1, log, dry_run=True, confirm_upload=False)
+    assert ran == [1]                          # 强制放行继续制作
+    assert job.stage("review")["approved_by"] == "codebuddy-forced"
+    assert "上限" in job.stage("review")["forced_note"]
+
+
+def test_ai_review_reject_auto_remakes(tmp_path, monkeypatch):
+    """REJECT（未达上限）→ 留痕 + 自动重做（不再需要手动 --redo）。"""
+    job = Job.create(tmp_path / "jobs", "自动重做选题")
+    job.mark_done("script", "k")
+    job.manifest["stages"]["review"] = {"status": "needs-human", "key": "kk"}
+    job.save()
+    monkeypatch.setattr(
+        autopost.jobs_mod.Job, "find_resumable",
+        classmethod(lambda cls, root, topic, **kw: job))
+    monkeypatch.setattr(
+        autopost, "_run_codebuddy_review",
+        lambda j, lg: {"verdict": "REJECT", "issues_confirmed": ["年份错"],
+                       "issues_overruled": [], "new_findings": [], "summary": "否决"})
+    remade = []
+    monkeypatch.setattr(autopost, "_pipeline",
+                        lambda *a, **kw: remade.append(kw.get("fresh")))
+    cfg = {"topics": ["自动重做选题"]}
+    store = Store(str(tmp_path / "t.db"))
+    autopost._ai_review(store, cfg, 1, log, dry_run=True, confirm_upload=False)
+    assert remade == [True]                    # 自动 fresh 重做
+    assert job.stage("review")["round"] == 1
