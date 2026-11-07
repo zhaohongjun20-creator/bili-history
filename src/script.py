@@ -88,7 +88,7 @@ def _chat(api_key: str, prompt: str, model: str, temperature: float,
     """单次对话。网关（base_url）429/5xx 指数退避重试——订阅限流窗口常见。"""
     import time as _time
     url = base_url or ZHIPU_URL
-    timeout = 420 if base_url else 180
+    timeout = 600 if base_url else 180
     for attempt in range(4):                  # 3 次重试：20s/40s/80s
         r = requests.post(
             url,
@@ -100,7 +100,9 @@ def _chat(api_key: str, prompt: str, model: str, temperature: float,
         if r.status_code in (429, 500, 502, 503, 504) and attempt < 3:
             _time.sleep(20 * (attempt + 1))
             continue
-        r.raise_for_status()
+        if r.status_code >= 400:
+            raise requests.HTTPError(
+                f"{r.status_code} {url}: {r.text[:200]}", response=r)
         return r.json()["choices"][0]["message"]["content"]
     raise RuntimeError(f"chat retries exhausted: {url}")
 

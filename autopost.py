@@ -1046,6 +1046,8 @@ def _ai_review(store, cfg, topic_index, log, dry_run, confirm_upload):
             "verdict": "pass", "approved_by": "codebuddy",
             "ai_review": verdict, "approved_at": stamp}
         job.save()
+        # 复位选题状态：PASS 后 _pipeline 会重新领题，review-human 会被闸门弹回
+        store.reset_topic(topic)
         log.info("🤖 AI 终审 PASS（《%s》），继续制作", topic)
     else:
         # 返修上限（用户定的规矩）：同一题最多被打回 3 次，第 3 次修改后的
