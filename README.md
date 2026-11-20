@@ -75,6 +75,14 @@ python douyin_bridge.py login    # 首次扫码，登录态存本地 profile
 - 内容限定**历史**（二战战役/装备/人物），不涉当代时政
 - 抖音无公开上传 API，采用与 social-auto-upload 等开源项目一致的浏览器/客户端自动化路线
 
+## 生成角色片文档
+
+下面三页只写生成角色片的分镜提示词和交片检查。史料静帧仍走原来的 Ken Burns / 幻灯平移。「禁止静帧平移」只写在生成角色镜头里。
+
+- [Brief → 编号分镜提示词（模板）](docs/brief到编号分镜提示词-模板.md)
+- [生成提示词规则（连续表演）](docs/生成提示词规则-连续表演.md)
+- [交片检查（按镜切片）](docs/交片检查-按镜切片.md)
+
 ## 相关项目
 
 - biliup（B站投稿 CLI）、social-auto-upload、MoneyPrinterTurbo —— 本项目借鉴的优秀开源
