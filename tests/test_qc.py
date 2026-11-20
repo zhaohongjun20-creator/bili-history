@@ -108,3 +108,35 @@ def test_srt_monotonic_ok(tmp_path):
                  "2\n00:00:01,000 --> 00:00:02,000\nB\n", encoding="utf-8")
     cues = qc._parse_srt(str(p))
     assert len(cues) == 2
+
+
+def test_qc_source_does_not_score_still_pans():
+    """角色镜「禁止静帧平移」不得写进质检代码。史料 Ken Burns 由文档单独放行。"""
+    text = Path(qc.__file__).read_text(encoding="utf-8")
+    body = text.split('"""', 2)[-1]
+    assert "freezedetect" not in body
+    assert "静帧平移" not in body
+    assert "Ken Burns" in text
+
+
+def test_kenburns_still_pan_passes(media, tmp_path):
+    """一张静帧做平移（史料 Ken Burns 的同类运镜）必须通过质检。"""
+    still = tmp_path / "still.png"
+    clip = tmp_path / "pan.mp4"
+    subprocess.run(
+        [FF, "-y", "-f", "lavfi", "-i", "testsrc=s=640x360:d=1",
+         "-frames:v", "1", str(still)],
+        check=True, capture_output=True, timeout=60)
+    subprocess.run(
+        [FF, "-y", "-loop", "1", "-i", str(still),
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+         "-vf", ("scale=800:450,"
+                 "zoompan=z=1.1:x='(iw-iw/zoom)*on/49':"
+                 "y='ih/2-(ih/zoom/2)':d=50:s=320x240:fps=25"),
+         "-t", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+         "-shortest", str(clip)],
+        check=True, capture_output=True, timeout=120)
+    ok, problems = qc.qc_video(str(clip), _srt(tmp_path / "pan.srt"),
+                               media["cover"], CFG, narration_total=2.0)
+    assert ok, problems
+    assert not any("静帧" in p or "平移" in p for p in problems)

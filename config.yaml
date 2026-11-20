@@ -114,6 +114,8 @@ review_model: "glm-4-flash"   # 无记忆审查官模型（渲染前审查 + 人
 
 # 成片自动质检阈值（src/qc.py；发布前最后一道闸）
 qc:
+  # 只调规格/音量/黑帧/时长。不要在这里加「静帧平移」阈值：
+  # 史料 Ken Burns 必须放行；该禁令只针对生成角色镜，见 docs/交片检查-按镜切片.md。
   max_black_seconds: 2.0     # 累计黑帧上限
   max_volume_db: -0.5        # 峰值高于此视为削波
   min_mean_volume_db: -45.0  # 平均低于此视为近乎静音
