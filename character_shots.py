@@ -1,4 +1,4 @@
-"""角色向测试片：三五句 brief → 编号分镜提示词。
+"""军事号生成角色镜：三五句 brief → 编号分镜提示词。
 
 不接入 autopost，不生成视频，不改史料 Ken Burns。只调用本仓库已有的
 GLM（环境变量 ZHIPU_API_KEY，默认模型 glm-4-flash）。
@@ -20,7 +20,7 @@ from src.character_shots import DEFAULT_MODEL, generate_from_brief  # noqa: E402
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="把三五句角色片 brief 写成编号分镜提示词（GLM / ZHIPU_API_KEY）")
+        description="把三五句 brief 写成编号分镜提示词（GLM / ZHIPU_API_KEY）")
     parser.add_argument("brief", help="brief 的 markdown 或文本路径")
     parser.add_argument("-o", "--output", help="输出路径，默认与 brief 同目录、文件名加「-分镜提示词」")
     parser.add_argument("--model", default=DEFAULT_MODEL,

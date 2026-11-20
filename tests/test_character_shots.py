@@ -33,27 +33,27 @@ CUT: 01
 时码: 00:00.00–00:03.00
 镜类: 角色表演
 提示词:
-  总规格：16:9，3.00 秒，电影感三维。她在雨夜巷口停下。
+  总规格：16:9，3.00 秒，电影感三维。这是生成表演。她在雨夜巷口停下。
   锁定元素：齐肩蓝发、白外套、黑靴，设计锁定。
   按秒分镜：0.00–1.20 她跑进巷口，双臂摆动、双脚交替蹬地，重心随步伐起伏；1.20–3.00 重心前移后刹住。
   禁止项：禁止把全身当静帧平移；不添加 brief 没有的台词。
 检查:
   手脚重心：必须连续动
   字先可读：无字
-  浅色遮罩：查破边、破洞、手和口袋脱落；破了重拍或换镜，不用生成像素补
+  浅色遮罩：查破边、破洞、手和装具脱落；破了重拍或换镜，不用生成像素补
 
 CUT: 02
 时码: 00:03.00–00:06.00
 镜类: 动作后定格
 提示词:
-  总规格：16:9，3.00 秒，电影感三维。她再次跑起来，动作做到后定格。
+  总规格：16:9，3.00 秒，电影感三维。这是生成表演。她再次跑起来，动作做到后定格。
   锁定元素：齐肩蓝发、白外套、黑靴，设计锁定。
   按秒分镜：0.00–2.20 她连续起跑，双臂摆动、双脚蹬地，重心前移；2.20–3.00 动作做到这一帧后定格。
   禁止项：禁止未做动作就静帧平移。
 检查:
   手脚重心：可在动作做到后定格
   字先可读：无字
-  浅色遮罩：查破边、破洞、手和口袋脱落；破了重拍或换镜，不用生成像素补
+  浅色遮罩：查破边、破洞、手和装具脱落；破了重拍或换镜，不用生成像素补
 """
 
 GOOD_ONE = """
@@ -61,14 +61,14 @@ CUT: 01
 时码: 00:00.00–00:03.00
 镜类: 角色表演
 提示词:
-  总规格：16:9，3.00 秒，电影感三维。她在雨夜巷口起跑。
+  总规格：16:9，3.00 秒，电影感三维。这是生成表演。她在雨夜巷口起跑。
   锁定元素：齐肩蓝发、白外套、黑靴，设计锁定。
   按秒分镜：她连续起跑，双臂摆动、双脚交替蹬地，重心前移。
   禁止项：禁止把全身当静帧平移。
 检查:
   手脚重心：必须连续动
   字先可读：无字
-  浅色遮罩：查破边、破洞、手和口袋脱落；破了重拍或换镜，不用生成像素补
+  浅色遮罩：查破边、破洞、手和装具脱落；破了重拍或换镜，不用生成像素补
 """
 
 STILL = """
@@ -106,14 +106,14 @@ CUT: 02
 时码: 00:03.00–00:06.00
 镜类: 角色表演
 提示词:
-  总规格：16:9，3.00 秒，电影感三维。她再次跑起来。
+  总规格：16:9，3.00 秒，电影感三维。这是生成表演。她再次跑起来。
   锁定元素：齐肩蓝发、白外套、黑靴，设计锁定。
   按秒分镜：她从画面左侧连续跑向右侧，双臂摆动、双脚交替蹬地，重心随步伐起伏。
   禁止项：禁止把全身当静帧平移。
 检查:
   手脚重心：必须连续动
   字先可读：无字
-  浅色遮罩：查破边、破洞、手和口袋脱落；破了重拍或换镜，不用生成像素补
+  浅色遮罩：查破边、破洞、手和装具脱落；破了重拍或换镜，不用生成像素补
 """
 
 ARCHIVAL = """
@@ -180,6 +180,10 @@ def test_prompt_limits_still_pan_ban_and_ao_list():
     assert "13" in prompt and "示例" in prompt
     assert "道具" in prompt and "台词" in prompt
     assert "不添加" in prompt
+    assert "武器" in prompt and "不编造史实" in prompt
+    assert "生成表演" in prompt
+    assert "手和装具脱落" in prompt
+    assert "雪地" in prompt and "硬抠" in prompt
     assert "左移" in prompt
 
 
@@ -198,7 +202,9 @@ def test_still_slide_character_shot_is_rewritten_once():
     assert "手脚和重心保持不动" in calls[1]
     assert "手脚和重心保持不动" not in out
     assert "双臂摆动" in out
-    assert "未通过" not in out
+    assert "生成表演" in calls[1]
+    assert "史料实拍" in calls[1]
+    assert "状态: 未通过" not in out
     shots = mod.parse_shots(out)
     assert [s.number for s in shots] == [1, 2]
     assert mod.shot_problems(shots[1]) == []
@@ -238,7 +244,7 @@ def test_missing_block_is_rewritten_once():
     assert len(shots) == 1
     assert mod.shot_problems(shots[0]) == []
     assert "禁止项" in out
-    assert "未通过" not in out
+    assert "状态: 未通过" not in out
 
 
 def test_archival_ken_burns_pan_is_not_rewritten():
@@ -252,7 +258,7 @@ def test_archival_ken_burns_pan_is_not_rewritten():
     assert len(calls) == 1
     assert "Ken Burns 左移" in out
     assert "不改照片里的船和人" in out
-    assert "未通过" not in out
+    assert "状态: 未通过" not in out
     shot = mod.parse_shots(out)[0]
     assert mod.classify(shot.kind) == "archival"
     assert mod.shot_problems(shot) == []
@@ -307,6 +313,62 @@ def test_wrong_count_stays_rejected_after_one_rewrite():
     assert "未通过" in out
     assert "brief 要求 1" in out
     assert len(mod.parse_shots(out)) == 2
+
+
+def test_character_shot_missing_generated_label_is_rejected():
+    unlabeled = GOOD_ONE.replace("这是生成表演。", "")
+    calls = []
+
+    def chat(prompt):
+        calls.append(prompt)
+        return unlabeled
+
+    out = mod.generate_shot_markdown(BRIEF_ONE, chat)
+    assert len(calls) == 2
+    assert "角色镜总规格未标明是生成表演" in calls[1]
+    assert "生成表演" in calls[1]
+    assert "史料实拍" in calls[1]
+    assert "状态: 未通过" in out
+    assert "角色镜总规格未标明是生成表演" in out
+    shot = mod.parse_shots(unlabeled)[0]
+    assert any("角色镜总规格未标明是生成表演" == p for p in mod.shot_problems(shot))
+
+
+def test_officer_walk_in_stop_and_raise_passes():
+    brief = """一条 8 秒、16:9、共 1 镜的占位短片。
+军官走入、停步举手。黄卡其军装锁定。风格一次定死。
+不添加武器、台词或结局。
+"""
+    shot = """
+CUT: 01
+时码: 00:00.00–00:08.00
+镜类: 角色表演
+提示词:
+  总规格：16:9，8.00 秒。这是生成表演，不是史料实拍。
+  锁定元素：占位军官，黄卡其军装，设计锁定。
+  按秒分镜：军官从左走入，双脚交替迈开步伐，停步后右手平举。
+  禁止项：禁止全身静帧平移。不得写成史料实拍或历史照片。不补 brief 没有的武器或台词。
+检查:
+  手脚重心：必须连续动
+  字先可读：无字
+  浅色遮罩：查破边、破洞、手和装具脱落；破了重拍或换镜，不用生成像素补
+"""
+    calls = []
+
+    def chat(prompt):
+        calls.append(prompt)
+        return shot
+
+    out = mod.generate_shot_markdown(brief, chat)
+    assert len(calls) == 1
+    parsed = mod.parse_shots(out)
+    assert len(parsed) == 1
+    assert mod.shot_problems(parsed[0]) == []
+    assert "走入" in parsed[0].blocks["按秒分镜"]
+    assert "停步" in parsed[0].blocks["按秒分镜"]
+    assert "平举" in parsed[0].blocks["按秒分镜"]
+    assert "状态: 未通过" not in out
+    assert not mod.still_slide_only("军官从左走入，迈开步伐，停步后举手平举。")
 
 
 def test_empty_brief_rejected():
