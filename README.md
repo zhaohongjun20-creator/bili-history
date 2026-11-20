@@ -60,6 +60,10 @@ python autopost.py --confirm-upload 15 # 投稿超时后人工核实"平台未�
 python autopost.py --mark-uploaded 15 --bvid BVxxxx  # 人工核实"已收到"，直接标记完成
 
 python -m pytest tests/          # 单元+集成测试（不花真实额度）
+
+python character_shots.py path/to/brief.md
+# 军事号生成角色镜：三五句 brief → 同目录 brief-分镜提示词.md
+# 用上面的 ZHIPU_API_KEY（GLM，默认 glm-4-flash）。不投稿、不进日更。
 ```
 
 抖音/西瓜分发（可选）：
@@ -68,11 +72,20 @@ python douyin_bridge.py login    # 首次扫码，登录态存本地 profile
 # autopost ⑦步自动分发；网页 session 被客户端顶掉时走客户端 UI 操纵
 ```
 
-## 角色向测试片（文档，不进生产线）
+## 军事号生成角色镜（不进生产线）
 
-日常成片仍是史料静帧的 Ken Burns 四向运镜（`src/slideshow.py`：推近 / 拉远 / 左移 / 右移），外加缩放和静帧滑动。下面几份只用于另行起草的角色表演测试片：三五句 brief 写成编号分镜提示词，交片时按镜看手脚、挡字和浅色遮罩。不接入 `autopost.py`，不新增生成依赖，也不改写稿或配图。
+日常成片仍是史料静帧的 Ken Burns 四向运镜（`src/slideshow.py`：推近 / 拉远 / 左移 / 右移），外加缩放和静帧滑动。需要生成角色表演时另写提示词，不接入 `autopost.py`，不新增生成依赖，也不改写稿、配图或 `src/qc.py`。
 
-「禁止静帧平移」只约束 AI 生成的角色镜头——人物是一张静帧在滑，手脚和重心没有动。史料图的 Ken Burns 平移、推拉和静帧滑动继续使用。成片质检 `src/qc.py` 不评运镜，不会因这种静帧运镜拒发。
+把三五句 brief（片子、锁定角色、时长、画幅、镜数、风格和表演方式）写成编号分镜。需要 `.env` 里的 `ZHIPU_API_KEY`，走现有 GLM，不换模型供应商：
+
+```bash
+python character_shots.py path/to/brief.md
+python character_shots.py path/to/brief.md -o path/to/out.md
+```
+
+默认写出同目录的 `brief-分镜提示词.md`：每镜四段（总规格、锁定元素、按秒分镜、禁止项）加三项检查。生成角色镜的总规格要写明「生成表演」，不得写成史料实拍或历史照片。浅色军装、装备、旗帜不要贴浅色、雪地、灰墙或网格硬抠；遮罩破了重拍或换镜，不用生成像素补。不添加 brief 里没有的情节、道具、台词、武器或结局，不编造史实。文末附交片提醒：先交完整可看的母带，再按时间码交带编号的切片；不要只交静帧和压缩包。结构缺项、未标生成表演，或角色镜只是一张静帧在滑，会自动重写该镜一次；仍不合格的标「未通过」，不要拿去生成。
+
+「禁止静帧平移」只约束 AI 生成的角色镜头。史料图的 Ken Burns 平移、推拉和静帧滑动继续使用。成片质检 `src/qc.py` 不评运镜，不会因这种静帧运镜拒发。镜数以 brief 为准。AO 预告 13 镜和军史「一镜史料静帧加一镜走入」都只是格式示例。
 
 - [Brief → 编号分镜提示词](docs/brief到编号分镜提示词-模板.md)
 - [生成提示词规则（连续表演）](docs/生成提示词规则-连续表演.md)
