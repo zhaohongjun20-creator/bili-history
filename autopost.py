@@ -471,7 +471,7 @@ def stage_clips(job, voices, pool_imgs, cfg, log) -> tuple[list, list]:
         v = voices[i]
         tail = 0.0 if i == len(secs) - 1 else fade
         v["tail"] = tail
-        stickers = resolve_stickers(secs[i].get("stickers"), v["duration"])
+        stickers = resolve_stickers(secs[i].get("stickers"), v["duration"])             if cfg.get("stickers") else []   # 默认关：战争史料画面不上表情贴
         plans.append({
             "i": i, "img": imgs[i], "v": v, "tail": tail,
             "mode": modes[i % 4], "stickers": stickers, "im": im,
@@ -576,11 +576,23 @@ def stage_cover(job, final, log) -> str:
     st = job.stage("cover") or {}
     if st.get("status") == "done" and Path(cover).exists():
         return cover
-    from src.cover import extract_cover
+    from src.cover import extract_cover, make_cover
     job.mark_running("cover")
-    extract_cover(final, cover, at_second=2)
+    # 设计封面优先：本集史料图暗化背景 + 标题大字；失败降级回抽帧
+    try:
+        bg = sorted(Path(job.path("materials")).glob("img_00*"))
+        title = job.manifest.get("publish", {}).get("title") or \
+            job.manifest.get("title") or ""
+        if bg and title:
+            make_cover(bg[0], title, cover)
+            log.info("封面（设计版）: %s", cover)
+        else:
+            raise FileNotFoundError("缺史料底图或标题")
+    except Exception as e:
+        log.warning("设计封面失败（%s），降级抽帧", str(e)[:60])
+        extract_cover(final, cover, at_second=2)
+        log.info("封面（抽帧降级）: %s", cover)
     job.mark_done("cover", outputs={"cover": "cover.jpg"})
-    log.info("封面: %s", cover)
     return cover
 
 

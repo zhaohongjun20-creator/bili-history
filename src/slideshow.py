@@ -3,6 +3,7 @@
 转场音画对齐原理：每段视频（除末段）尾部多留 fade 秒画面，旁白说完后画面
 停留溶解切换（纪录片节奏）；音频 concat 后总长恰与 xfade 后视频总长相等。
 """
+import re
 import subprocess
 from pathlib import Path
 import imageio_ffmpeg
@@ -12,16 +13,21 @@ BIG = 2400  # 先放大再 zoom，减轻整数抖动
 
 
 def _kenburns(mode: str, frames: int) -> str:
-    """四向运镜：in 推近 / out 拉远 / panleft 左移 / panright 右移。"""
+    """四向运镜：in 推近 / out 拉远 / panleft 左移 / panright 右移。
+
+    推拉与平移都用余弦缓入缓出（0.5-0.5*cos(PI*t)），消除线性运镜的
+    机械感——起停各留一段"几乎不动"的呼吸时间，纪录片观感。
+    """
     center = "iw/2-(iw/zoom/2)"
     vcenter = "ih/2-(ih/zoom/2)"
+    ease = f"(0.5-0.5*cos(PI*on/{max(frames - 1, 1)}))"
     if mode == "in":
-        return f"z='min(1.0+0.0006*on,1.12)':x='{center}':y='{vcenter}'"
+        return f"z='1.0+0.12*{ease}':x='{center}':y='{vcenter}'"
     if mode == "out":
-        return f"z='max(1.12-0.0006*on,1.0)':x='{center}':y='{vcenter}'"
+        return f"z='1.12-0.12*{ease}':x='{center}':y='{vcenter}'"
     if mode == "panright":
-        return (f"z='1.10':x='(iw-iw/zoom)*on/{frames}':y='{vcenter}'")
-    return f"z='1.10':x='(iw-iw/zoom)*(1-on/{frames})':y='{vcenter}'"
+        return f"z='1.10':x='(iw-iw/zoom)*{ease}':y='{vcenter}'"
+    return f"z='1.10':x='(iw-iw/zoom)*(1-{ease})':y='{vcenter}'"
 
 
 def build_section_clip(img: str, voice_mp3: str, duration: float, out_mp4: str,
@@ -70,24 +76,68 @@ def _fmt_ts(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+_SENT_SPLIT = re.compile(r"(?<=[。！？；!?])")
+_CLAUSE_SPLIT = re.compile(r"(?<=[，、：,])")
+MAX_CUE_CHARS = 26
+
+
+def _split_cues(text: str) -> list:
+    """整段旁白 → 短句字幕序列：按句末标点拆，超长句再按逗号顿号贪心打包。
+
+    单条不超过约 26 字（两行内），标点保留句尾。
+    """
+    text = text.replace("\n", " ").strip()
+    sentences = [s.strip() for s in _SENT_SPLIT.split(text) if s.strip()]
+    cues = []
+    for sent in sentences:
+        if len(sent) <= MAX_CUE_CHARS + 4:      # 标点占宽，宽容 4 字
+            cues.append(sent)
+            continue
+        clauses = [c.strip() for c in _CLAUSE_SPLIT.split(sent) if c.strip()]
+        buf = ""
+        for cl in clauses:
+            if buf and len(buf) + len(cl) > MAX_CUE_CHARS:
+                cues.append(buf)
+                buf = cl
+            else:
+                buf = buf + cl
+        if buf:
+            cues.append(buf)
+    return cues
+
+
 def make_srt(narrations: list, path: str) -> str:
-    """每段旁白一条字幕，时间轴按段起点对齐。
+    """分段旁白 → 分句字幕：句末标点拆条，段内按字符数加权分配时间。
 
     段起点 = 此前各段旁白时长之和（尾部停留 fade 秒被 xfade 重叠吃掉，
     不是顺序累加——按 duration+tail 累加会让字幕逐段漂移、超出成片）。
+    段内各句按显示字符数占比瓜分该段时长，末句吃掉剩余时间避免缝隙。
     """
     lines, t0 = [], 0.0
-    for i, n in enumerate(narrations, 1):
-        lines += [str(i), f"{_fmt_ts(t0)} --> {_fmt_ts(t0 + n['duration'])}",
-                  n["text"].replace("\n", " "), ""]
-        t0 += n["duration"]
+    idx = 0
+    for n in narrations:
+        dur = n["duration"]
+        cues = _split_cues(n["text"])
+        if not cues:
+            t0 += dur
+            continue
+        weights = [max(len(re.sub(r"\s", "", c)), 1) for c in cues]
+        total_w = sum(weights)
+        acc = 0.0
+        for c, w in zip(cues, weights):
+            start = t0 + dur * acc / total_w
+            acc += w
+            end = t0 + dur * acc / total_w if c is not cues[-1] else t0 + dur
+            idx += 1
+            lines += [str(idx), f"{_fmt_ts(start)} --> {_fmt_ts(end)}", c, ""]
+        t0 += dur
     Path(path).write_text("\n".join(lines), encoding="utf-8")
     return path
 
 
 # 纪录片字幕样式：白字黑边+轻阴影（抄 MoneyPrinterTurbo 的可配置思路，默认值内置）
 SUBTITLE_STYLE = ("FontName=Microsoft YaHei,FontSize=17,PrimaryColour=&H00FFFFFF,"
-                  "OutlineColour=&H96000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=30,"
+                  "OutlineColour=&H96000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=42,"
                   "Alignment=2")
 
 # 段落转场轮换池（xfade 纪录片向：溶解/擦除/圆形展开/黑场）
